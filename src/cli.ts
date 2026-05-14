@@ -15,6 +15,81 @@ type DiscoveryFixture = {
   primary_sources?: DiscoverySource[];
   verification_sources?: DiscoverySource[];
 };
+type SourceSnapshotManifest = {
+  program_year: string;
+  retrieved_at: string;
+  sources: Array<{
+    name: string;
+    raw_path: string;
+    source_identifier: string;
+    source_kind: SourceKind;
+    url: string;
+  }>;
+};
+type ParsedPrimarySourceArtifact = {
+  fixture_path: string;
+  program_year: string;
+  records: ParsedPrimarySourceRecord[];
+  retrieved_at: string;
+};
+type ParsedPrimarySourceRecord = {
+  affiliated_schools: Array<{
+    display_values: {
+      name: string | null;
+    };
+    public_ids: {
+      affiliated_school_dbn: null;
+    };
+  }>;
+  providers: Array<{
+    description: string | null;
+    display_values: {
+      end_date: string | null;
+      end_time: string | null;
+      grades_description: string | null;
+      name: string | null;
+      start_date: string | null;
+      start_time: string | null;
+    };
+    email: string | null;
+    phone_number: string | null;
+    provider_contact: {
+      email: string | null;
+      name: string | null;
+      phone_number: string | null;
+    };
+    public_ids: {
+      portfolio_id: string | null;
+      program_code: string | null;
+      program_id: number | null;
+    };
+    website: string | null;
+  }>;
+  source: {
+    raw_path: string;
+    source_identifier: string;
+    source_name: string;
+    url: string;
+  };
+  summer_rising_site: {
+    display_values: {
+      accessibility: string | null;
+      borough: string | null;
+      district_name: string | null;
+      full_address: string | null;
+      grades_description: string | null;
+      name: string | null;
+      school_year: string | null;
+    };
+    public_ids: {
+      admission_process: string | null;
+      building_code: string | null;
+      district_code: string | null;
+      site_dbn: string | null;
+      site_id: number | null;
+    };
+  };
+};
 
 function parseArgs(argv: string[]) {
   const [command, ...rest] = argv;
@@ -90,6 +165,10 @@ function ensureDirectory(directoryPath: string) {
 
 function resolveSnapshotManifestPath(outputRoot: string, programYear: string) {
   return path.join(outputRoot, 'source-snapshots', programYear, 'manifest.json');
+}
+
+function resolveParsedPrimarySourcePath(outputRoot: string, programYear: string) {
+  return path.join(outputRoot, 'parsed', programYear, 'primary-source-records.json');
 }
 
 function runInspect(fixturePath: string) {
@@ -231,53 +310,156 @@ function runExtract(args: { fixturePath: string; outputRoot: string }) {
     );
   }
 
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
-    program_year: string;
-    retrieved_at: string;
-    sources: Array<{
-      name: string;
-      raw_path: string;
-      source_identifier: string;
-      source_kind: SourceKind;
-      url: string;
-    }>;
-  };
-
-  const sources = manifest.sources.map((source) => {
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as SourceSnapshotManifest;
+  const primarySources = manifest.sources.filter((source) => source.source_kind === 'Primary Source');
+  const records = primarySources.flatMap((source) => {
     const rawPath = path.join(outputRoot, source.raw_path);
     const rawSnapshot = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as {
       response_body: unknown;
     };
 
-    return {
-      name: source.name,
-      raw_path: source.raw_path,
-      response_body: rawSnapshot.response_body,
-      source_identifier: source.source_identifier,
-      source_kind: source.source_kind,
+    return parsePrimarySourceSnapshot({
+      rawPath: source.raw_path,
+      responseBody: rawSnapshot.response_body,
+      sourceIdentifier: source.source_identifier,
+      sourceName: source.name,
       url: source.url,
-    };
+    });
   });
 
-  const normalizedDirectory = path.join(outputRoot, 'normalized', programYear);
-  ensureDirectory(normalizedDirectory);
-
-  const normalizedPath = path.join(normalizedDirectory, 'source-snapshots.json');
+  const parsedPath = resolveParsedPrimarySourcePath(outputRoot, programYear);
+  ensureDirectory(path.dirname(parsedPath));
   fs.writeFileSync(
-    normalizedPath,
+    parsedPath,
     JSON.stringify(
-      {
+      satisfiesParsedPrimarySourceArtifact({
         fixture_path: path.relative(outputRoot, fixturePath),
         program_year: manifest.program_year,
         retrieved_at: manifest.retrieved_at,
-        sources,
-      },
+        records,
+      }),
       null,
       2,
     ),
   );
 
-  console.log(`Reused ${sources.length} cached Source Snapshots for program year ${programYear}.`);
+  console.log(
+    `Parsed ${records.length} Primary Source records from ${primarySources.length} cached Source Snapshots for program year ${programYear}.`,
+  );
+}
+
+function parsePrimarySourceSnapshot(args: {
+  rawPath: string;
+  responseBody: unknown;
+  sourceIdentifier: string;
+  sourceName: string;
+  url: string;
+}) {
+  const { rawPath, responseBody, sourceIdentifier, sourceName, url } = args;
+  const results = readArray(readObject(responseBody).results);
+
+  return results.map((rawRecord) =>
+    parsePrimarySourceRecord(rawRecord, {
+      raw_path: rawPath,
+      source_identifier: sourceIdentifier,
+      source_name: sourceName,
+      url,
+    }),
+  );
+}
+
+function parsePrimarySourceRecord(
+  rawRecord: unknown,
+  source: ParsedPrimarySourceRecord['source'],
+): ParsedPrimarySourceRecord {
+  const record = readObject(rawRecord);
+  const school = readObject(record.school);
+  const district = readObject(school.district);
+  const programs = readArray(record.programs).map(parseProgramRecord);
+  const affiliatedSchools = readArray(record.affiliated_schools)
+    .map((value) => normalizeOptionalString(value))
+    .map((name) => ({
+      display_values: { name },
+      public_ids: { affiliated_school_dbn: null },
+    }));
+
+  return {
+    source,
+    summer_rising_site: {
+      display_values: {
+        accessibility: normalizeOptionalString(school.accessibility),
+        borough: normalizeOptionalString(district.borough),
+        district_name: normalizeOptionalString(district.name),
+        full_address: normalizeOptionalString(school.full_address),
+        grades_description: normalizeOptionalString(record.grades_description),
+        name: normalizeOptionalString(record.name),
+        school_year: normalizeOptionalString(school.school_year),
+      },
+      public_ids: {
+        admission_process: normalizeOptionalString(record.admission_process),
+        building_code: normalizeOptionalString(record.building_code),
+        district_code: normalizeOptionalString(district.code),
+        site_dbn: normalizeOptionalString(school.dbn),
+        site_id: normalizeOptionalNumber(record.id),
+      },
+    },
+    affiliated_schools: affiliatedSchools,
+    providers: programs,
+  };
+}
+
+function parseProgramRecord(rawProgram: unknown): ParsedPrimarySourceRecord['providers'][number] {
+  const program = readObject(rawProgram);
+  const nestedProgram = readObject(program.program);
+
+  return {
+    description: normalizeOptionalString(program.description),
+    display_values: {
+      end_date: normalizeOptionalString(program.end_date),
+      end_time: normalizeOptionalString(program.end_time),
+      grades_description: normalizeOptionalString(program.grades_description),
+      name: normalizeOptionalString(program.name ?? nestedProgram.name),
+      start_date: normalizeOptionalString(program.start_date),
+      start_time: normalizeOptionalString(program.start_time),
+    },
+    email: normalizeOptionalString(program.provider_email),
+    phone_number: normalizeOptionalString(program.provider_phone_number),
+    provider_contact: {
+      email: normalizeOptionalString(program.site_contact_email),
+      name: normalizeOptionalString(program.site_contact_name),
+      phone_number: normalizeOptionalString(program.site_contact_phone_number),
+    },
+    public_ids: {
+      portfolio_id: normalizeOptionalString(program.portfolio_id),
+      program_code: normalizeOptionalString(nestedProgram.code),
+      program_id: normalizeOptionalNumber(program.id),
+    },
+    website: normalizeOptionalString(program.provider_website),
+  };
+}
+
+function readArray(value: unknown) {
+  return Array.isArray(value) ? value : [];
+}
+
+function readObject(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function normalizeOptionalString(value: unknown) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  return value.trim() === '' ? null : value;
+}
+
+function normalizeOptionalNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function satisfiesParsedPrimarySourceArtifact(value: ParsedPrimarySourceArtifact) {
+  return value;
 }
 
 function runValidate(fixturePath: string) {

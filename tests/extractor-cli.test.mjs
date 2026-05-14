@@ -183,7 +183,78 @@ test('extract command reuses cached Source Snapshots without live network calls'
   const server = http.createServer((request, response) => {
     if (request.url === '/primary') {
       response.setHeader('content-type', 'application/json');
-      response.end(JSON.stringify({ sites: [{ id: 'ms-1', name: 'P.S. 1' }] }));
+      response.end(
+        JSON.stringify({
+          count: 1,
+          results: [
+            {
+              id: 110929,
+              name: 'District 75 Led Enrichment at 110 CHESTER STREET (Brownsville)',
+              school: {
+                name: 'District 75 Led Enrichment at 110 CHESTER STREET (Brownsville)',
+                dbn: '23K396SR',
+                accessibility: 'Fully Accessible',
+                school_year: '2025-26 School Year',
+                district: {
+                  borough: 'Brooklyn',
+                  code: '23',
+                  name: 'DISTRICT 23',
+                },
+                full_address: '110 CHESTER STREET, BROOKLYN, NY 11212',
+              },
+              programs: [
+                {
+                  id: 128038,
+                  program: {
+                    code: 'K396SRMS1',
+                    name: 'District 75 Led Enrichment (from Sid Miller Academy, 6-8)',
+                  },
+                  name: 'District 75 Led Enrichment (from Sid Miller Academy, 6-8)',
+                  description: 'District 75 middle school program',
+                  start_date: '2026-07-01',
+                  end_date: '2026-08-07',
+                  start_time: '8:00am',
+                  end_time: '6:00pm',
+                  provider_website: '',
+                  provider_email: '',
+                  provider_phone_number: '',
+                  site_contact_name: 'Chana Max',
+                  site_contact_email: 'cmax@schools.nyc.gov',
+                  site_contact_phone_number: '(718) 385-6200',
+                  portfolio_id: 'K396SR2',
+                  grades_description: '6 to 8',
+                },
+                {
+                  id: 128037,
+                  program: {
+                    code: 'K396SRES1',
+                    name: 'District 75 Led Enrichment (from P.S. 999 Weird Grades School, 3K-2)',
+                  },
+                  name: 'District 75 Led Enrichment (from P.S. 999 Weird Grades School, 3K-2)',
+                  description: 'District 75 early childhood program',
+                  start_date: '2026-07-01',
+                  end_date: '2026-08-14',
+                  start_time: '9:00am',
+                  end_time: '3:00pm',
+                  provider_website: 'https://provider.example.org',
+                  provider_email: 'info@provider.example.org',
+                  provider_phone_number: '212-555-0000',
+                  site_contact_name: '',
+                  site_contact_email: '',
+                  site_contact_phone_number: '',
+                  portfolio_id: 'K396SR1',
+                  grades_description: '3K to 2',
+                },
+              ],
+              grades_description: 'K to 5; 6 to 8; 3K to 2',
+              other_features: [],
+              affiliated_schools: ['Sid Miller Academy (K-8)', 'P.S. 999 Weird Grades School'],
+              admission_process: 'SR',
+              building_code: 'K396',
+            },
+          ],
+        }),
+      );
       return;
     }
 
@@ -264,18 +335,57 @@ test('extract command reuses cached Source Snapshots without live network calls'
   );
 
   assert.equal(extractResult.status, 0, extractResult.stderr);
-  assert.match(extractResult.stdout, /Reused 2 cached Source Snapshots/);
+  assert.match(extractResult.stdout, /Parsed 1 Primary Source records from 1 cached Source Snapshots/);
 
-  const normalizedPath = path.join(outputRoot, 'normalized', '2025', 'source-snapshots.json');
-  assert.equal(fs.existsSync(normalizedPath), true, 'normalized snapshot artifact missing');
+  const parsedPath = path.join(outputRoot, 'parsed', '2025', 'primary-source-records.json');
+  assert.equal(fs.existsSync(parsedPath), true, 'parsed source record artifact missing');
 
-  const normalizedArtifact = JSON.parse(fs.readFileSync(normalizedPath, 'utf8'));
-  assert.equal(normalizedArtifact.program_year, '2025');
-  assert.equal(normalizedArtifact.sources.length, 2);
+  const parsedArtifact = JSON.parse(fs.readFileSync(parsedPath, 'utf8'));
+  assert.equal(parsedArtifact.program_year, '2025');
+  assert.equal(parsedArtifact.retrieved_at, capturedAt);
+  assert.equal(parsedArtifact.records.length, 1);
+  assert.equal('sources' in parsedArtifact, false);
+
+  const [record] = parsedArtifact.records;
+  assert.equal(record.source.source_identifier, 'primary-fixture');
+  assert.equal(record.summer_rising_site.display_values.name, 'District 75 Led Enrichment at 110 CHESTER STREET (Brownsville)');
+  assert.equal(record.summer_rising_site.display_values.grades_description, 'K to 5; 6 to 8; 3K to 2');
+  assert.equal(record.summer_rising_site.public_ids.site_id, 110929);
+  assert.equal(record.summer_rising_site.public_ids.site_dbn, '23K396SR');
+  assert.equal(record.summer_rising_site.public_ids.building_code, 'K396');
+
   assert.deepEqual(
-    normalizedArtifact.sources.map((source) => source.name),
-    ['Primary fixture source', 'Verification fixture source'],
+    record.affiliated_schools.map((school) => school.display_values.name),
+    ['Sid Miller Academy (K-8)', 'P.S. 999 Weird Grades School'],
   );
+
+  assert.equal(record.providers.length, 2);
+  assert.equal(
+    record.providers[0].display_values.name,
+    'District 75 Led Enrichment (from Sid Miller Academy, 6-8)',
+  );
+  assert.equal(record.providers[0].display_values.grades_description, '6 to 8');
+  assert.equal(record.providers[0].public_ids.program_id, 128038);
+  assert.equal(record.providers[0].public_ids.program_code, 'K396SRMS1');
+  assert.equal(record.providers[0].public_ids.portfolio_id, 'K396SR2');
+  assert.equal(record.providers[0].website, null);
+  assert.equal(record.providers[0].email, null);
+  assert.equal(record.providers[0].phone_number, null);
+  assert.equal(record.providers[0].provider_contact.name, 'Chana Max');
+  assert.equal(record.providers[0].provider_contact.email, 'cmax@schools.nyc.gov');
+  assert.equal(record.providers[0].provider_contact.phone_number, '(718) 385-6200');
+
+  assert.equal(
+    record.providers[1].display_values.name,
+    'District 75 Led Enrichment (from P.S. 999 Weird Grades School, 3K-2)',
+  );
+  assert.equal(record.providers[1].display_values.grades_description, '3K to 2');
+  assert.equal(record.providers[1].website, 'https://provider.example.org');
+  assert.equal(record.providers[1].email, 'info@provider.example.org');
+  assert.equal(record.providers[1].phone_number, '212-555-0000');
+  assert.equal(record.providers[1].provider_contact.name, null);
+  assert.equal(record.providers[1].provider_contact.email, null);
+  assert.equal(record.providers[1].provider_contact.phone_number, null);
 });
 
 test('snapshot command uses low concurrency by default', async () => {
