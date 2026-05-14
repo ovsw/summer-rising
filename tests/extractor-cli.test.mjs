@@ -440,7 +440,422 @@ test('extract command reuses cached Source Snapshots without live network calls'
     assert.equal(row.summer_rising_site.grade_buckets.serves_grade_k_5, true);
     assert.equal(row.summer_rising_site.grade_buckets.serves_grade_6_8, true);
     assert.equal(row.summer_rising_site.grade_buckets.serves_grade_9_12, false);
+    assert.equal(row.school_verification.status, 'source only');
+    assert.equal(row.school_verification.matched_by, null);
   }
+});
+
+test('extract command assigns school verification statuses without removing Lead Rows', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'summer-rising-school-verification-'));
+  const fixturePath = path.join(tempRoot, 'public-source-endpoints.json');
+  const outputRoot = path.join(tempRoot, 'artifacts');
+  const capturedAt = '2026-05-14T11:30:00.000Z';
+
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+
+    if (request.url === '/primary') {
+      response.end(
+        JSON.stringify({
+          count: 5,
+          results: [
+            {
+              id: 1001,
+              name: 'Exact Match Summer Rising Site',
+              school: {
+                name: 'Exact Match Summer Rising Site',
+                dbn: '01M100SR',
+                district: {
+                  borough: 'Manhattan',
+                  code: '1',
+                  name: 'DISTRICT 1',
+                },
+                full_address: '100 Exact Street, New York, NY 10002',
+              },
+              programs: [
+                {
+                  id: 2001,
+                  program: {
+                    code: 'M100SREX1',
+                    name: 'Exact Provider',
+                  },
+                  grades_description: '6 to 8',
+                },
+              ],
+              grades_description: '6 to 8',
+              affiliated_schools: [{ name: 'Exact Match Academy', dbn: '01M001' }],
+              admission_process: 'SR',
+              building_code: 'M100',
+            },
+            {
+              id: 1002,
+              name: 'Address Match Summer Rising Site',
+              school: {
+                name: 'Address Match Summer Rising Site',
+                dbn: '02M200SR',
+                district: {
+                  borough: 'Brooklyn',
+                  code: '2',
+                  name: 'DISTRICT 2',
+                },
+                full_address: '200 Address Avenue, Brooklyn, NY 11212',
+              },
+              programs: [
+                {
+                  id: 2002,
+                  program: {
+                    code: 'M200SRAD1',
+                    name: 'Address Provider',
+                  },
+                  grades_description: 'K to 5',
+                },
+              ],
+              grades_description: 'K to 5',
+              affiliated_schools: ['Address Match Academy'],
+              admission_process: 'SR',
+              building_code: 'K200',
+            },
+            {
+              id: 1003,
+              name: 'Suggested Match Summer Rising Site',
+              school: {
+                name: 'Suggested Match Summer Rising Site',
+                dbn: '03M300SR',
+                district: {
+                  borough: 'Queens',
+                  code: '3',
+                  name: 'DISTRICT 3',
+                },
+                full_address: '300 Suggestion Road, Queens, NY 11101',
+              },
+              programs: [
+                {
+                  id: 2003,
+                  program: {
+                    code: 'Q300SRSG1',
+                    name: 'Suggested Provider',
+                  },
+                  grades_description: '6 to 8',
+                },
+              ],
+              grades_description: '6 to 8',
+              affiliated_schools: ['P.S. 999 Weird Grades School'],
+              admission_process: 'SR',
+              building_code: 'Q300',
+            },
+            {
+              id: 1004,
+              name: 'Needs Review Summer Rising Site',
+              school: {
+                name: 'Needs Review Summer Rising Site',
+                dbn: '04M400SR',
+                district: {
+                  borough: 'Bronx',
+                  code: '4',
+                  name: 'DISTRICT 4',
+                },
+                full_address: '400 Review Boulevard, Bronx, NY 10451',
+              },
+              programs: [
+                {
+                  id: 2004,
+                  program: {
+                    code: 'X400SRNR1',
+                    name: 'Review Provider',
+                  },
+                  grades_description: '9 to 12',
+                },
+              ],
+              grades_description: '9 to 12',
+              affiliated_schools: ['Harriet Tubman Academy'],
+              admission_process: 'SR',
+              building_code: 'X400',
+            },
+            {
+              id: 1005,
+              name: 'Source Only Summer Rising Site',
+              school: {
+                name: 'Source Only Summer Rising Site',
+                dbn: '05M500SR',
+                district: {
+                  borough: 'Staten Island',
+                  code: '5',
+                  name: 'DISTRICT 5',
+                },
+                full_address: '500 Source Way, Staten Island, NY 10301',
+              },
+              programs: [
+                {
+                  id: 2005,
+                  program: {
+                    code: 'R500SRSO1',
+                    name: 'Source Only Provider',
+                  },
+                  grades_description: 'K to 5',
+                },
+              ],
+              grades_description: 'K to 5',
+              affiliated_schools: ['No Match Academy'],
+              admission_process: 'SR',
+              building_code: 'R500',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (request.url === '/verification') {
+      response.end(
+        JSON.stringify({
+          results: [
+            {
+              id: 9001,
+              name: 'Completely Different Name',
+              dbn: '01M001',
+              address: '999 Wrong Street, New York, NY 10013',
+              borough: 'Manhattan',
+              zip: '10013',
+            },
+            {
+              id: 9002,
+              name: 'Address Match Academy',
+              dbn: '02M222',
+              address: '200 Address Avenue, Brooklyn, NY 11212',
+              borough: 'Brooklyn',
+              zip: '11212',
+            },
+            {
+              id: 9003,
+              name: 'P S 999 Weird Grade School',
+              dbn: '75K999',
+            },
+            {
+              id: 9004,
+              name: 'Harriet Tubman Acad',
+              dbn: '08X111',
+            },
+            {
+              id: 9005,
+              name: 'Harriet Tubman Academy at PS 41',
+              dbn: '08X112',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end('not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  fs.writeFileSync(
+    fixturePath,
+    JSON.stringify(
+      {
+        primary_sources: [
+          {
+            name: 'Primary fixture source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/primary`,
+            source_identifier: 'primary-fixture',
+          },
+        ],
+        verification_sources: [
+          {
+            name: 'Verification fixture source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/verification`,
+            source_identifier: 'verification-fixture',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  const snapshotResult = await spawnCli(
+    [
+      'snapshot',
+      '--fixture',
+      fixturePath,
+      '--output-root',
+      outputRoot,
+      '--captured-at',
+      capturedAt,
+    ],
+    {
+      env: {
+        ...process.env,
+        SUMMER_RISING_PROGRAM_YEAR: '2025',
+      },
+    },
+  );
+
+  assert.equal(snapshotResult.status, 0, snapshotResult.stderr);
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+
+  const extractResult = await spawnCli(['extract', '--fixture', fixturePath, '--output-root', outputRoot], {
+    env: {
+      ...process.env,
+      SUMMER_RISING_PROGRAM_YEAR: '2025',
+    },
+  });
+
+  assert.equal(extractResult.status, 0, extractResult.stderr);
+
+  const leadRowsPath = path.join(outputRoot, 'normalized', '2025', 'lead-rows.json');
+  const leadArtifact = JSON.parse(fs.readFileSync(leadRowsPath, 'utf8'));
+  assert.equal(leadArtifact.rows.length, 5);
+
+  const rowsBySchoolName = new Map(
+    leadArtifact.rows.map((row) => [row.affiliated_school.display_values.name, row]),
+  );
+
+  assert.equal(rowsBySchoolName.get('Exact Match Academy').school_verification.status, 'verified');
+  assert.equal(
+    rowsBySchoolName.get('Exact Match Academy').school_verification.matched_by,
+    'exact public id/code',
+  );
+  assert.equal(rowsBySchoolName.get('Exact Match Academy').school_verification.candidate.dbn, '01M001');
+
+  assert.equal(rowsBySchoolName.get('Address Match Academy').school_verification.status, 'verified');
+  assert.equal(
+    rowsBySchoolName.get('Address Match Academy').school_verification.matched_by,
+    'normalized address plus borough/zip',
+  );
+  assert.equal(rowsBySchoolName.get('Address Match Academy').school_verification.candidate.dbn, '02M222');
+
+  assert.equal(rowsBySchoolName.get('P.S. 999 Weird Grades School').school_verification.status, 'suggested match');
+  assert.equal(rowsBySchoolName.get('P.S. 999 Weird Grades School').school_verification.matched_by, 'fuzzy name');
+  assert.equal(
+    rowsBySchoolName.get('P.S. 999 Weird Grades School').school_verification.candidate.dbn,
+    '75K999',
+  );
+
+  assert.equal(rowsBySchoolName.get('Harriet Tubman Academy').school_verification.status, 'needs review');
+  assert.equal(rowsBySchoolName.get('Harriet Tubman Academy').school_verification.matched_by, 'fuzzy name');
+  assert.equal(rowsBySchoolName.get('Harriet Tubman Academy').school_verification.candidate_count, 2);
+
+  assert.equal(rowsBySchoolName.get('No Match Academy').school_verification.status, 'source only');
+  assert.equal(rowsBySchoolName.get('No Match Academy').school_verification.matched_by, null);
+  assert.equal(rowsBySchoolName.get('No Match Academy').school_verification.candidate, null);
+});
+
+test('extract command marks school verification missing when Verification Source data is unavailable', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'summer-rising-school-verification-missing-'));
+  const fixturePath = path.join(tempRoot, 'public-source-endpoints.json');
+  const outputRoot = path.join(tempRoot, 'artifacts');
+  const capturedAt = '2026-05-14T11:45:00.000Z';
+
+  const server = http.createServer((request, response) => {
+    if (request.url === '/primary') {
+      response.setHeader('content-type', 'application/json');
+      response.end(
+        JSON.stringify({
+          count: 1,
+          results: [
+            {
+              id: 1100,
+              name: 'Missing Verification Site',
+              school: {
+                name: 'Missing Verification Site',
+                dbn: '10X100SR',
+                district: {
+                  borough: 'Bronx',
+                  code: '10',
+                  name: 'DISTRICT 10',
+                },
+                full_address: '10 Missing Plaza, Bronx, NY 10468',
+              },
+              programs: [
+                {
+                  id: 2100,
+                  program: {
+                    code: 'X100SRMS1',
+                    name: 'Missing Verification Provider',
+                  },
+                  grades_description: '6 to 8',
+                },
+              ],
+              grades_description: '6 to 8',
+              affiliated_schools: ['Missing Verification Academy'],
+              admission_process: 'SR',
+              building_code: 'X100',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end('not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  fs.writeFileSync(
+    fixturePath,
+    JSON.stringify(
+      {
+        primary_sources: [
+          {
+            name: 'Primary fixture source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/primary`,
+            source_identifier: 'primary-fixture',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  const snapshotResult = await spawnCli(
+    [
+      'snapshot',
+      '--fixture',
+      fixturePath,
+      '--output-root',
+      outputRoot,
+      '--captured-at',
+      capturedAt,
+    ],
+    {
+      env: {
+        ...process.env,
+        SUMMER_RISING_PROGRAM_YEAR: '2025',
+      },
+    },
+  );
+
+  assert.equal(snapshotResult.status, 0, snapshotResult.stderr);
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+
+  const extractResult = await spawnCli(['extract', '--fixture', fixturePath, '--output-root', outputRoot], {
+    env: {
+      ...process.env,
+      SUMMER_RISING_PROGRAM_YEAR: '2025',
+    },
+  });
+
+  assert.equal(extractResult.status, 0, extractResult.stderr);
+
+  const leadRowsPath = path.join(outputRoot, 'normalized', '2025', 'lead-rows.json');
+  const leadArtifact = JSON.parse(fs.readFileSync(leadRowsPath, 'utf8'));
+  assert.equal(leadArtifact.rows.length, 1);
+  assert.equal(leadArtifact.rows[0].school_verification.status, 'missing');
+  assert.equal(leadArtifact.rows[0].school_verification.matched_by, null);
+  assert.equal(leadArtifact.rows[0].school_verification.candidate, null);
+  assert.equal(leadArtifact.rows[0].school_verification.candidate_count, 0);
 });
 
 test('snapshot command uses low concurrency by default', async () => {

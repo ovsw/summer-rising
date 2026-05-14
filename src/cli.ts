@@ -37,13 +37,19 @@ type LeadRowArtifact = {
   retrieved_at: string;
   rows: LeadRow[];
 };
+type VerificationStatus =
+  | 'missing'
+  | 'needs review'
+  | 'source only'
+  | 'suggested match'
+  | 'verified';
 type ParsedPrimarySourceRecord = {
   affiliated_schools: Array<{
     display_values: {
       name: string | null;
     };
     public_ids: {
-      affiliated_school_dbn: null;
+      affiliated_school_dbn: string | null;
     };
   }>;
   providers: Array<{
@@ -108,10 +114,31 @@ type LeadRow = {
     normalized_name: string | null;
   };
   retrieved_at: string;
+  school_verification: SchoolVerification;
   source: ParsedPrimarySourceRecord['source'];
   summer_rising_site: ParsedPrimarySourceRecord['summer_rising_site'] & {
     grade_buckets: GradeBuckets;
   };
+};
+type VerificationCandidate = {
+  address: string | null;
+  borough: string | null;
+  building_code: string | null;
+  dbn: string | null;
+  directory_school_id: number | null;
+  name: string | null;
+  postal_code: string | null;
+  source_identifier: string;
+  source_name: string;
+};
+type SchoolVerification = {
+  candidate: VerificationCandidate | null;
+  candidate_count: number;
+  matched_by: 'exact public id/code' | 'fuzzy name' | 'normalized address plus borough/zip' | null;
+  status: VerificationStatus;
+};
+type RawSourceSnapshot = {
+  response_body: unknown;
 };
 
 function parseArgs(argv: string[]) {
@@ -339,11 +366,10 @@ function runExtract(args: { fixturePath: string; outputRoot: string }) {
 
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as SourceSnapshotManifest;
   const primarySources = manifest.sources.filter((source) => source.source_kind === 'Primary Source');
+  const verificationSources = manifest.sources.filter((source) => source.source_kind === 'Verification Source');
   const records = primarySources.flatMap((source) => {
     const rawPath = path.join(outputRoot, source.raw_path);
-    const rawSnapshot = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as {
-      response_body: unknown;
-    };
+    const rawSnapshot = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as RawSourceSnapshot;
 
     return parsePrimarySourceSnapshot({
       rawPath: source.raw_path,
@@ -351,6 +377,16 @@ function runExtract(args: { fixturePath: string; outputRoot: string }) {
       sourceIdentifier: source.source_identifier,
       sourceName: source.name,
       url: source.url,
+    });
+  });
+  const verificationCandidates = verificationSources.flatMap((source) => {
+    const rawPath = path.join(outputRoot, source.raw_path);
+    const rawSnapshot = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as RawSourceSnapshot;
+
+    return parseVerificationSourceSnapshot({
+      responseBody: rawSnapshot.response_body,
+      sourceIdentifier: source.source_identifier,
+      sourceName: source.name,
     });
   });
 
@@ -383,6 +419,7 @@ function runExtract(args: { fixturePath: string; outputRoot: string }) {
             programYear: manifest.program_year,
             record,
             retrievedAt: manifest.retrieved_at,
+            verificationCandidates,
           }),
         ),
       }),
@@ -400,33 +437,38 @@ function buildLeadRows(args: {
   programYear: string;
   record: ParsedPrimarySourceRecord;
   retrievedAt: string;
+  verificationCandidates: VerificationCandidate[];
 }): LeadRow[] {
-  const { programYear, record, retrievedAt } = args;
-  const affiliatedSchools = record.affiliated_schools.length > 0 ? record.affiliated_schools : [{ display_values: { name: null }, public_ids: { affiliated_school_dbn: null } }];
-  const providers = record.providers.length > 0 ? record.providers : [{
-    description: null,
-    display_values: {
-      end_date: null,
-      end_time: null,
-      grades_description: null,
-      name: null,
-      start_date: null,
-      start_time: null,
-    },
-    email: null,
-    phone_number: null,
-    provider_contact: {
-      email: null,
-      name: null,
-      phone_number: null,
-    },
-    public_ids: {
-      portfolio_id: null,
-      program_code: null,
-      program_id: null,
-    },
-    website: null,
-  }];
+  const { programYear, record, retrievedAt, verificationCandidates } = args;
+  const affiliatedSchools = record.affiliated_schools.length > 0
+    ? record.affiliated_schools
+    : [{ display_values: { name: null }, public_ids: { affiliated_school_dbn: null } }];
+  const providers = record.providers.length > 0
+    ? record.providers
+    : [{
+        description: null,
+        display_values: {
+          end_date: null,
+          end_time: null,
+          grades_description: null,
+          name: null,
+          start_date: null,
+          start_time: null,
+        },
+        email: null,
+        phone_number: null,
+        provider_contact: {
+          email: null,
+          name: null,
+          phone_number: null,
+        },
+        public_ids: {
+          portfolio_id: null,
+          program_code: null,
+          program_id: null,
+        },
+        website: null,
+      }];
 
   return providers.flatMap((provider) =>
     affiliatedSchools.map((affiliatedSchool) => ({
@@ -438,6 +480,11 @@ function buildLeadRows(args: {
         normalized_name: normalizeProviderName(provider.display_values.name),
       },
       retrieved_at: retrievedAt,
+      school_verification: determineSchoolVerification({
+        affiliatedSchool,
+        summerRisingSite: record.summer_rising_site,
+        verificationCandidates,
+      }),
       source: record.source,
       summer_rising_site: {
         ...record.summer_rising_site,
@@ -475,12 +522,7 @@ function parsePrimarySourceRecord(
   const school = readObject(record.school);
   const district = readObject(school.district);
   const programs = readArray(record.programs).map(parseProgramRecord);
-  const affiliatedSchools = readArray(record.affiliated_schools)
-    .map((value) => normalizeOptionalString(value))
-    .map((name) => ({
-      display_values: { name },
-      public_ids: { affiliated_school_dbn: null },
-    }));
+  const affiliatedSchools = readArray(record.affiliated_schools).map(parseAffiliatedSchool);
 
   return {
     source,
@@ -537,6 +579,77 @@ function parseProgramRecord(rawProgram: unknown): ParsedPrimarySourceRecord['pro
   };
 }
 
+function parseAffiliatedSchool(
+  rawAffiliatedSchool: unknown,
+): ParsedPrimarySourceRecord['affiliated_schools'][number] {
+  if (typeof rawAffiliatedSchool === 'string') {
+    return {
+      display_values: {
+        name: normalizeOptionalString(rawAffiliatedSchool),
+      },
+      public_ids: {
+        affiliated_school_dbn: null,
+      },
+    };
+  }
+
+  const school = readObject(rawAffiliatedSchool);
+
+  return {
+    display_values: {
+      name: normalizeOptionalString(school.name),
+    },
+    public_ids: {
+      affiliated_school_dbn: normalizeOptionalString(school.dbn),
+    },
+  };
+}
+
+function parseVerificationSourceSnapshot(args: {
+  responseBody: unknown;
+  sourceIdentifier: string;
+  sourceName: string;
+}): VerificationCandidate[] {
+  const { responseBody, sourceIdentifier, sourceName } = args;
+  const payload = readObject(responseBody);
+  const results = readArray(payload.results).length > 0
+    ? readArray(payload.results)
+    : readArray(payload.schools);
+
+  return results.map((rawCandidate) => {
+    const candidate = readObject(rawCandidate);
+
+    return {
+      address: normalizeOptionalString(
+        candidate.address ??
+          candidate.full_address ??
+          candidate.location ??
+          candidate.street_address,
+      ),
+      borough: normalizeOptionalString(candidate.borough),
+      building_code: normalizeOptionalString(candidate.building_code),
+      dbn: normalizeOptionalString(candidate.dbn),
+      directory_school_id: normalizeOptionalNumber(
+        candidate.id ??
+          candidate.school_id ??
+          candidate.directory_school_id,
+      ),
+      name: normalizeOptionalString(
+        candidate.name ??
+          candidate.display_name ??
+          candidate.school_name,
+      ),
+      postal_code: normalizeOptionalString(
+        candidate.zip ??
+          candidate.zip_code ??
+          candidate.postal_code,
+      ),
+      source_identifier: sourceIdentifier,
+      source_name: sourceName,
+    };
+  });
+}
+
 function readArray(value: unknown) {
   return Array.isArray(value) ? value : [];
 }
@@ -568,6 +681,203 @@ function normalizeProviderName(value: string | null) {
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+function normalizeIdentifier(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return value.replace(/[^a-z0-9]+/gi, '').toUpperCase();
+}
+
+function normalizeSchoolName(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeAddress(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/\b(street|st)\b/g, 'st')
+    .replace(/\b(avenue|ave)\b/g, 'ave')
+    .replace(/\b(road|rd)\b/g, 'rd')
+    .replace(/\b(boulevard|blvd)\b/g, 'blvd')
+    .replace(/\b(place|pl)\b/g, 'pl')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function extractPostalCode(value: string | null) {
+  const match = value?.match(/\b(\d{5})\b/);
+  return match ? match[1] : null;
+}
+
+function scoreNameSimilarity(left: string | null, right: string | null) {
+  if (!left || !right) {
+    return 0;
+  }
+
+  if (left === right) {
+    return 1;
+  }
+
+  const leftTokens = new Set(left.split(' '));
+  const rightTokens = new Set(right.split(' '));
+  let intersectionCount = 0;
+
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) {
+      intersectionCount += 1;
+    }
+  }
+
+  const unionCount = new Set([...leftTokens, ...rightTokens]).size;
+  return unionCount === 0 ? 0 : intersectionCount / unionCount;
+}
+
+function isFuzzyNameMatch(left: string | null, right: string | null) {
+  if (!left || !right) {
+    return false;
+  }
+
+  const similarity = scoreNameSimilarity(left, right);
+  if (similarity >= 0.7) {
+    return true;
+  }
+
+  const [leftFirstToken] = left.split(' ');
+  const [rightFirstToken] = right.split(' ');
+  return similarity >= 0.5 && leftFirstToken === rightFirstToken;
+}
+
+function determineSchoolVerification(args: {
+  affiliatedSchool: ParsedPrimarySourceRecord['affiliated_schools'][number];
+  summerRisingSite: ParsedPrimarySourceRecord['summer_rising_site'];
+  verificationCandidates: VerificationCandidate[];
+}): SchoolVerification {
+  const { affiliatedSchool, summerRisingSite, verificationCandidates } = args;
+
+  if (verificationCandidates.length === 0) {
+    return {
+      candidate: null,
+      candidate_count: 0,
+      matched_by: null,
+      status: 'missing',
+    };
+  }
+
+  const exactIdentifiers = [
+    affiliatedSchool.public_ids.affiliated_school_dbn,
+    summerRisingSite.public_ids.site_dbn,
+    summerRisingSite.public_ids.building_code,
+  ]
+    .map(normalizeIdentifier)
+    .filter((value): value is string => value !== null);
+  const exactMatches = verificationCandidates.filter((candidate) => {
+    const candidateIdentifiers = [candidate.dbn, candidate.building_code]
+      .map(normalizeIdentifier)
+      .filter((value): value is string => value !== null);
+
+    return candidateIdentifiers.some((identifier) => exactIdentifiers.includes(identifier));
+  });
+
+  if (exactMatches.length === 1) {
+    return {
+      candidate: exactMatches[0],
+      candidate_count: 1,
+      matched_by: 'exact public id/code',
+      status: 'verified',
+    };
+  }
+
+  if (exactMatches.length > 1) {
+    return {
+      candidate: exactMatches[0],
+      candidate_count: exactMatches.length,
+      matched_by: 'exact public id/code',
+      status: 'needs review',
+    };
+  }
+
+  const normalizedRowAddress = normalizeAddress(summerRisingSite.display_values.full_address);
+  const normalizedRowBorough = normalizeSchoolName(summerRisingSite.display_values.borough);
+  const rowPostalCode = extractPostalCode(summerRisingSite.display_values.full_address);
+  const addressMatches = verificationCandidates.filter((candidate) => {
+    const normalizedCandidateAddress = normalizeAddress(candidate.address);
+    if (!normalizedRowAddress || !normalizedCandidateAddress || normalizedRowAddress !== normalizedCandidateAddress) {
+      return false;
+    }
+
+    const boroughMatches =
+      normalizedRowBorough !== null &&
+      normalizeSchoolName(candidate.borough) === normalizedRowBorough;
+    const postalCodeMatches = rowPostalCode !== null && candidate.postal_code === rowPostalCode;
+
+    return boroughMatches || postalCodeMatches;
+  });
+
+  if (addressMatches.length === 1) {
+    return {
+      candidate: addressMatches[0],
+      candidate_count: 1,
+      matched_by: 'normalized address plus borough/zip',
+      status: 'verified',
+    };
+  }
+
+  if (addressMatches.length > 1) {
+    return {
+      candidate: addressMatches[0],
+      candidate_count: addressMatches.length,
+      matched_by: 'normalized address plus borough/zip',
+      status: 'needs review',
+    };
+  }
+
+  const normalizedSchoolName = normalizeSchoolName(affiliatedSchool.display_values.name);
+  const fuzzyMatches = verificationCandidates.filter((candidate) => {
+    const candidateName = normalizeSchoolName(candidate.name);
+    return isFuzzyNameMatch(normalizedSchoolName, candidateName);
+  });
+
+  if (fuzzyMatches.length === 1) {
+    return {
+      candidate: fuzzyMatches[0],
+      candidate_count: 1,
+      matched_by: 'fuzzy name',
+      status: 'suggested match',
+    };
+  }
+
+  if (fuzzyMatches.length > 1) {
+    return {
+      candidate: fuzzyMatches[0],
+      candidate_count: fuzzyMatches.length,
+      matched_by: 'fuzzy name',
+      status: 'needs review',
+    };
+  }
+
+  return {
+    candidate: null,
+    candidate_count: 0,
+    matched_by: null,
+    status: 'source only',
+  };
 }
 
 function normalizeGradeBuckets(value: string | null): GradeBuckets {
