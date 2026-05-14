@@ -386,6 +386,61 @@ test('extract command reuses cached Source Snapshots without live network calls'
   assert.equal(record.providers[1].provider_contact.name, null);
   assert.equal(record.providers[1].provider_contact.email, null);
   assert.equal(record.providers[1].provider_contact.phone_number, null);
+
+  const leadRowsPath = path.join(outputRoot, 'normalized', '2025', 'lead-rows.json');
+  assert.equal(fs.existsSync(leadRowsPath), true, 'lead row artifact missing');
+
+  const leadArtifact = JSON.parse(fs.readFileSync(leadRowsPath, 'utf8'));
+  assert.equal(leadArtifact.program_year, '2025');
+  assert.equal(leadArtifact.retrieved_at, capturedAt);
+  assert.equal(leadArtifact.rows.length, 4);
+
+  const normalizedProviderNames = new Set();
+  const affiliatedSchoolNames = new Set();
+
+  for (const row of leadArtifact.rows) {
+    assert.equal(row.program_year, '2025');
+    assert.equal(row.retrieved_at, capturedAt);
+    assert.equal(
+      row.summer_rising_site.display_values.name,
+      'District 75 Led Enrichment at 110 CHESTER STREET (Brownsville)',
+    );
+    assert.equal(row.summer_rising_site.public_ids.site_id, 110929);
+    assert.equal(typeof row.provider.display_values.name, 'string');
+    assert.equal(typeof row.provider.normalized_name, 'string');
+    assert.equal(typeof row.affiliated_school.display_values.name, 'string');
+
+    normalizedProviderNames.add(row.provider.normalized_name);
+    affiliatedSchoolNames.add(row.affiliated_school.display_values.name);
+  }
+
+  assert.deepEqual(Array.from(normalizedProviderNames), ['district 75 led enrichment']);
+  assert.deepEqual(Array.from(affiliatedSchoolNames).sort(), [
+    'P.S. 999 Weird Grades School',
+    'Sid Miller Academy (K-8)',
+  ]);
+
+  const middleSchoolRows = leadArtifact.rows.filter(
+    (row) => row.provider.display_values.grades_description === '6 to 8',
+  );
+  assert.equal(middleSchoolRows.length, 2);
+  assert.deepEqual(
+    middleSchoolRows.map((row) => row.affiliated_school.display_values.name).sort(),
+    ['P.S. 999 Weird Grades School', 'Sid Miller Academy (K-8)'],
+  );
+
+  for (const row of middleSchoolRows) {
+    assert.equal(row.provider.public_ids.program_id, 128038);
+    assert.equal(row.provider.public_ids.program_code, 'K396SRMS1');
+    assert.equal(row.provider.public_ids.portfolio_id, 'K396SR2');
+    assert.equal(row.provider.normalized_name, 'district 75 led enrichment');
+    assert.equal(row.provider.grade_buckets.serves_grade_k_5, false);
+    assert.equal(row.provider.grade_buckets.serves_grade_6_8, true);
+    assert.equal(row.provider.grade_buckets.serves_grade_9_12, false);
+    assert.equal(row.summer_rising_site.grade_buckets.serves_grade_k_5, true);
+    assert.equal(row.summer_rising_site.grade_buckets.serves_grade_6_8, true);
+    assert.equal(row.summer_rising_site.grade_buckets.serves_grade_9_12, false);
+  }
 });
 
 test('snapshot command uses low concurrency by default', async () => {

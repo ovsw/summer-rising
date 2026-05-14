@@ -32,6 +32,11 @@ type ParsedPrimarySourceArtifact = {
   records: ParsedPrimarySourceRecord[];
   retrieved_at: string;
 };
+type LeadRowArtifact = {
+  program_year: string;
+  retrieved_at: string;
+  rows: LeadRow[];
+};
 type ParsedPrimarySourceRecord = {
   affiliated_schools: Array<{
     display_values: {
@@ -88,6 +93,24 @@ type ParsedPrimarySourceRecord = {
       site_dbn: string | null;
       site_id: number | null;
     };
+  };
+};
+type GradeBuckets = {
+  serves_grade_6_8: boolean;
+  serves_grade_9_12: boolean;
+  serves_grade_k_5: boolean;
+};
+type LeadRow = {
+  affiliated_school: ParsedPrimarySourceRecord['affiliated_schools'][number];
+  program_year: string;
+  provider: ParsedPrimarySourceRecord['providers'][number] & {
+    grade_buckets: GradeBuckets;
+    normalized_name: string | null;
+  };
+  retrieved_at: string;
+  source: ParsedPrimarySourceRecord['source'];
+  summer_rising_site: ParsedPrimarySourceRecord['summer_rising_site'] & {
+    grade_buckets: GradeBuckets;
   };
 };
 
@@ -169,6 +192,10 @@ function resolveSnapshotManifestPath(outputRoot: string, programYear: string) {
 
 function resolveParsedPrimarySourcePath(outputRoot: string, programYear: string) {
   return path.join(outputRoot, 'parsed', programYear, 'primary-source-records.json');
+}
+
+function resolveLeadRowsPath(outputRoot: string, programYear: string) {
+  return path.join(outputRoot, 'normalized', programYear, 'lead-rows.json');
 }
 
 function runInspect(fixturePath: string) {
@@ -343,8 +370,80 @@ function runExtract(args: { fixturePath: string; outputRoot: string }) {
     ),
   );
 
+  const leadRowsPath = resolveLeadRowsPath(outputRoot, programYear);
+  ensureDirectory(path.dirname(leadRowsPath));
+  fs.writeFileSync(
+    leadRowsPath,
+    JSON.stringify(
+      satisfiesLeadRowArtifact({
+        program_year: manifest.program_year,
+        retrieved_at: manifest.retrieved_at,
+        rows: records.flatMap((record) =>
+          buildLeadRows({
+            programYear: manifest.program_year,
+            record,
+            retrievedAt: manifest.retrieved_at,
+          }),
+        ),
+      }),
+      null,
+      2,
+    ),
+  );
+
   console.log(
     `Parsed ${records.length} Primary Source records from ${primarySources.length} cached Source Snapshots for program year ${programYear}.`,
+  );
+}
+
+function buildLeadRows(args: {
+  programYear: string;
+  record: ParsedPrimarySourceRecord;
+  retrievedAt: string;
+}): LeadRow[] {
+  const { programYear, record, retrievedAt } = args;
+  const affiliatedSchools = record.affiliated_schools.length > 0 ? record.affiliated_schools : [{ display_values: { name: null }, public_ids: { affiliated_school_dbn: null } }];
+  const providers = record.providers.length > 0 ? record.providers : [{
+    description: null,
+    display_values: {
+      end_date: null,
+      end_time: null,
+      grades_description: null,
+      name: null,
+      start_date: null,
+      start_time: null,
+    },
+    email: null,
+    phone_number: null,
+    provider_contact: {
+      email: null,
+      name: null,
+      phone_number: null,
+    },
+    public_ids: {
+      portfolio_id: null,
+      program_code: null,
+      program_id: null,
+    },
+    website: null,
+  }];
+
+  return providers.flatMap((provider) =>
+    affiliatedSchools.map((affiliatedSchool) => ({
+      affiliated_school: affiliatedSchool,
+      program_year: programYear,
+      provider: {
+        ...provider,
+        grade_buckets: normalizeGradeBuckets(provider.display_values.grades_description),
+        normalized_name: normalizeProviderName(provider.display_values.name),
+      },
+      retrieved_at: retrievedAt,
+      source: record.source,
+      summer_rising_site: {
+        ...record.summer_rising_site,
+        grade_buckets: normalizeGradeBuckets(record.summer_rising_site.display_values.grades_description),
+      },
+    })),
   );
 }
 
@@ -458,7 +557,34 @@ function normalizeOptionalNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function normalizeProviderName(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  return value
+    .replace(/\s*\(.*?\)\s*/g, ' ')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizeGradeBuckets(value: string | null): GradeBuckets {
+  const normalized = value?.toLowerCase() ?? '';
+
+  return {
+    serves_grade_6_8: /(6\s*to\s*8|6-8)/.test(normalized),
+    serves_grade_9_12: /(9\s*to\s*12|9-12)/.test(normalized),
+    serves_grade_k_5: /(k\s*to\s*5|k-5|3k\s*to\s*2|pre-k\s*to\s*2|pk\s*to\s*2)/.test(normalized),
+  };
+}
+
 function satisfiesParsedPrimarySourceArtifact(value: ParsedPrimarySourceArtifact) {
+  return value;
+}
+
+function satisfiesLeadRowArtifact(value: LeadRowArtifact) {
   return value;
 }
 
