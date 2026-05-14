@@ -138,8 +138,55 @@ type SchoolVerification = {
   status: VerificationStatus;
 };
 type RawSourceSnapshot = {
+  page_urls?: string[];
   response_body: unknown;
 };
+const leadDatasetColumns = [
+  'program_year',
+  'retrieved_at',
+  'source_name',
+  'source_identifier',
+  'source_url',
+  'summer_rising_site_name',
+  'district_name',
+  'address',
+  'city',
+  'state',
+  'zip',
+  'summer_rising_site_grades',
+  'summer_rising_site_serves_grade_k_5',
+  'summer_rising_site_serves_grade_6_8',
+  'summer_rising_site_serves_grade_9_12',
+  'provider_name',
+  'provider_normalized_name',
+  'provider_grades',
+  'provider_serves_grade_k_5',
+  'provider_serves_grade_6_8',
+  'provider_serves_grade_9_12',
+  'provider_contact_name',
+  'provider_contact_email',
+  'provider_contact_phone_number',
+  'provider_email',
+  'provider_phone_number',
+  'provider_website',
+  'affiliated_school_name',
+  'affiliated_school_dbn',
+  'school_verification_status',
+  'school_verification_matched_by',
+  'school_verification_candidate_name',
+  'school_verification_candidate_dbn',
+  'school_verification_candidate_count',
+  'summer_rising_site_id',
+  'summer_rising_site_dbn',
+  'summer_rising_building_code',
+  'district_code',
+  'admission_process',
+  'program_id',
+  'program_code',
+  'portfolio_id',
+] as const;
+type LeadDatasetColumn = (typeof leadDatasetColumns)[number];
+type LeadDatasetCsvRow = Record<LeadDatasetColumn, string>;
 
 function parseArgs(argv: string[]) {
   const [command, ...rest] = argv;
@@ -225,6 +272,10 @@ function resolveLeadRowsPath(outputRoot: string, programYear: string) {
   return path.join(outputRoot, 'normalized', programYear, 'lead-rows.json');
 }
 
+function resolveLeadDatasetCsvPath(outputRoot: string, programYear: string) {
+  return path.join(outputRoot, 'normalized', programYear, 'lead-dataset.csv');
+}
+
 function runInspect(fixturePath: string) {
   const fixture = loadFixture(fixturePath);
 
@@ -253,18 +304,7 @@ async function captureSourceSnapshot(args: {
     throw new Error(`Snapshot source ${source.name ?? 'unknown'} is missing a url.`);
   }
 
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Snapshot request failed for ${url}: ${response.status} ${response.statusText}`);
-  }
-
-  const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
-  const bodyText = await response.text();
-  let responseBody: unknown = bodyText;
-
-  if (contentType.includes('application/json')) {
-    responseBody = JSON.parse(bodyText);
-  }
+  const fetched = await fetchSourceResponseBody({ sourceKind, url });
 
   const rawDirectory = path.join(outputRoot, 'source-snapshots', 'raw', programYear);
   ensureDirectory(rawDirectory);
@@ -279,8 +319,9 @@ async function captureSourceSnapshot(args: {
     JSON.stringify(
       {
         name: source.name ?? slug,
+        page_urls: fetched.pageUrls,
         program_year: programYear,
-        response_body: responseBody,
+        response_body: fetched.responseBody,
         retrieved_at: capturedAt,
         source_identifier: source.source_identifier ?? null,
         source_kind: sourceKind,
@@ -299,6 +340,80 @@ async function captureSourceSnapshot(args: {
     source_kind: sourceKind,
     url,
   };
+}
+
+async function fetchSourceResponseBody(args: { sourceKind: SourceKind; url: string }) {
+  const { sourceKind, url } = args;
+  const firstPage = await fetchOneSourcePage(url);
+
+  if (!shouldCaptureAllPages({ responseBody: firstPage.responseBody, sourceKind })) {
+    return {
+      pageUrls: [url],
+      responseBody: firstPage.responseBody,
+    };
+  }
+
+  const pageUrls = [url];
+  const firstBody = readObject(firstPage.responseBody);
+  const results = [...readArray(firstBody.results)];
+  const seenUrls = new Set(pageUrls);
+  let nextUrl = readNextPageUrl(firstBody.next, url);
+
+  while (nextUrl) {
+    if (seenUrls.has(nextUrl)) {
+      throw new Error(`Pagination loop detected while fetching ${url}.`);
+    }
+
+    seenUrls.add(nextUrl);
+    pageUrls.push(nextUrl);
+
+    const nextPage = await fetchOneSourcePage(nextUrl);
+    const nextBody = readObject(nextPage.responseBody);
+    results.push(...readArray(nextBody.results));
+    nextUrl = readNextPageUrl(nextBody.next, nextUrl);
+  }
+
+  return {
+    pageUrls,
+    responseBody: {
+      ...firstBody,
+      next: null,
+      previous: null,
+      results,
+    },
+  };
+}
+
+async function fetchOneSourcePage(url: string) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Snapshot request failed for ${url}: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get('content-type') ?? 'application/octet-stream';
+  const bodyText = await response.text();
+
+  if (!contentType.includes('application/json')) {
+    return {
+      responseBody: bodyText as unknown,
+    };
+  }
+
+  return {
+    responseBody: JSON.parse(bodyText) as unknown,
+  };
+}
+
+function shouldCaptureAllPages(args: { responseBody: unknown; sourceKind: SourceKind }) {
+  return args.sourceKind === 'Primary Source' && hasSchoolListResults(args.responseBody);
+}
+
+function readNextPageUrl(value: unknown, currentUrl: string) {
+  if (typeof value !== 'string' || value.trim() === '') {
+    return null;
+  }
+
+  return new URL(value, currentUrl).toString();
 }
 
 async function runSnapshot(args: {
@@ -406,6 +521,15 @@ function runExtract(args: { fixturePath: string; outputRoot: string }) {
     ),
   );
 
+  const leadRows = records.flatMap((record) =>
+    buildLeadRows({
+      programYear: manifest.program_year,
+      record,
+      retrievedAt: manifest.retrieved_at,
+      verificationCandidates,
+    }),
+  );
+
   const leadRowsPath = resolveLeadRowsPath(outputRoot, programYear);
   ensureDirectory(path.dirname(leadRowsPath));
   fs.writeFileSync(
@@ -414,19 +538,15 @@ function runExtract(args: { fixturePath: string; outputRoot: string }) {
       satisfiesLeadRowArtifact({
         program_year: manifest.program_year,
         retrieved_at: manifest.retrieved_at,
-        rows: records.flatMap((record) =>
-          buildLeadRows({
-            programYear: manifest.program_year,
-            record,
-            retrievedAt: manifest.retrieved_at,
-            verificationCandidates,
-          }),
-        ),
+        rows: leadRows,
       }),
       null,
       2,
     ),
   );
+
+  const leadDatasetCsvPath = resolveLeadDatasetCsvPath(outputRoot, programYear);
+  fs.writeFileSync(leadDatasetCsvPath, serializeLeadDatasetCsv(leadRows));
 
   console.log(
     `Parsed ${records.length} Primary Source records from ${primarySources.length} cached Source Snapshots for program year ${programYear}.`,
@@ -502,7 +622,11 @@ function parsePrimarySourceSnapshot(args: {
   url: string;
 }) {
   const { rawPath, responseBody, sourceIdentifier, sourceName, url } = args;
-  const results = readArray(readObject(responseBody).results);
+  if (!hasSchoolListResults(responseBody)) {
+    return [];
+  }
+
+  const results = readArray(readObject(responseBody).results).filter(isSchoolListRecord);
 
   return results.map((rawRecord) =>
     parsePrimarySourceRecord(rawRecord, {
@@ -511,6 +635,21 @@ function parsePrimarySourceSnapshot(args: {
       source_name: sourceName,
       url,
     }),
+  );
+}
+
+function hasSchoolListResults(responseBody: unknown) {
+  return readArray(readObject(responseBody).results).some(isSchoolListRecord);
+}
+
+function isSchoolListRecord(value: unknown) {
+  const record = readObject(value);
+  const school = readObject(record.school);
+  return (
+    Object.keys(school).length > 0 &&
+    (Array.isArray(record.programs) ||
+      Array.isArray(record.affiliated_schools) ||
+      typeof record.building_code === 'string')
   );
 }
 
@@ -888,6 +1027,113 @@ function normalizeGradeBuckets(value: string | null): GradeBuckets {
     serves_grade_9_12: /(9\s*to\s*12|9-12)/.test(normalized),
     serves_grade_k_5: /(k\s*to\s*5|k-5|3k\s*to\s*2|pre-k\s*to\s*2|pk\s*to\s*2)/.test(normalized),
   };
+}
+
+function serializeLeadDatasetCsv(rows: LeadRow[]) {
+  const serializedRows = [
+    leadDatasetColumns.join(','),
+    ...rows.map((row) =>
+      leadDatasetColumns
+        .map((column) => escapeCsvValue(toLeadDatasetCsvRow(row)[column]))
+        .join(','),
+    ),
+  ];
+
+  return `${serializedRows.join('\n')}\n`;
+}
+
+function toLeadDatasetCsvRow(row: LeadRow): LeadDatasetCsvRow {
+  const addressParts = splitAddressParts(row.summer_rising_site.display_values.full_address);
+
+  return {
+    program_year: row.program_year,
+    retrieved_at: row.retrieved_at,
+    source_name: row.source.source_name,
+    source_identifier: row.source.source_identifier,
+    source_url: row.source.url,
+    summer_rising_site_name: formatCsvValue(row.summer_rising_site.display_values.name),
+    district_name: formatCsvValue(row.summer_rising_site.display_values.district_name),
+    address: formatCsvValue(row.summer_rising_site.display_values.full_address),
+    city: formatCsvValue(addressParts.city),
+    state: formatCsvValue(addressParts.state),
+    zip: formatCsvValue(addressParts.zip),
+    summer_rising_site_grades: formatCsvValue(row.summer_rising_site.display_values.grades_description),
+    summer_rising_site_serves_grade_k_5: formatCsvBoolean(row.summer_rising_site.grade_buckets.serves_grade_k_5),
+    summer_rising_site_serves_grade_6_8: formatCsvBoolean(row.summer_rising_site.grade_buckets.serves_grade_6_8),
+    summer_rising_site_serves_grade_9_12: formatCsvBoolean(row.summer_rising_site.grade_buckets.serves_grade_9_12),
+    provider_name: formatCsvValue(row.provider.display_values.name),
+    provider_normalized_name: formatCsvValue(row.provider.normalized_name),
+    provider_grades: formatCsvValue(row.provider.display_values.grades_description),
+    provider_serves_grade_k_5: formatCsvBoolean(row.provider.grade_buckets.serves_grade_k_5),
+    provider_serves_grade_6_8: formatCsvBoolean(row.provider.grade_buckets.serves_grade_6_8),
+    provider_serves_grade_9_12: formatCsvBoolean(row.provider.grade_buckets.serves_grade_9_12),
+    provider_contact_name: formatCsvValue(row.provider.provider_contact.name),
+    provider_contact_email: formatCsvValue(row.provider.provider_contact.email),
+    provider_contact_phone_number: formatCsvValue(row.provider.provider_contact.phone_number),
+    provider_email: formatCsvValue(row.provider.email),
+    provider_phone_number: formatCsvValue(row.provider.phone_number),
+    provider_website: formatCsvValue(row.provider.website),
+    affiliated_school_name: formatCsvValue(row.affiliated_school.display_values.name),
+    affiliated_school_dbn: formatCsvValue(row.affiliated_school.public_ids.affiliated_school_dbn),
+    school_verification_status: row.school_verification.status,
+    school_verification_matched_by: formatCsvValue(row.school_verification.matched_by),
+    school_verification_candidate_name: formatCsvValue(row.school_verification.candidate?.name ?? null),
+    school_verification_candidate_dbn: formatCsvValue(row.school_verification.candidate?.dbn ?? null),
+    school_verification_candidate_count: String(row.school_verification.candidate_count),
+    summer_rising_site_id: formatCsvNumber(row.summer_rising_site.public_ids.site_id),
+    summer_rising_site_dbn: formatCsvValue(row.summer_rising_site.public_ids.site_dbn),
+    summer_rising_building_code: formatCsvValue(row.summer_rising_site.public_ids.building_code),
+    district_code: formatCsvValue(row.summer_rising_site.public_ids.district_code),
+    admission_process: formatCsvValue(row.summer_rising_site.public_ids.admission_process),
+    program_id: formatCsvNumber(row.provider.public_ids.program_id),
+    program_code: formatCsvValue(row.provider.public_ids.program_code),
+    portfolio_id: formatCsvValue(row.provider.public_ids.portfolio_id),
+  };
+}
+
+function splitAddressParts(value: string | null) {
+  if (!value) {
+    return {
+      city: null,
+      state: null,
+      zip: null,
+    };
+  }
+
+  const match = value.match(/^(.*?),\s*([^,]+),\s*([A-Z]{2})\s+(\d{5})(?:-\d{4})?$/i);
+  if (!match) {
+    return {
+      city: null,
+      state: null,
+      zip: extractPostalCode(value),
+    };
+  }
+
+  return {
+    city: match[2].trim(),
+    state: match[3].trim().toUpperCase(),
+    zip: match[4].trim(),
+  };
+}
+
+function formatCsvValue(value: string | null) {
+  return value ?? '';
+}
+
+function formatCsvNumber(value: number | null) {
+  return value === null ? '' : String(value);
+}
+
+function formatCsvBoolean(value: boolean) {
+  return value ? 'true' : 'false';
+}
+
+function escapeCsvValue(value: string) {
+  if (/["\n,]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+
+  return value;
 }
 
 function satisfiesParsedPrimarySourceArtifact(value: ParsedPrimarySourceArtifact) {

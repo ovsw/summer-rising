@@ -42,6 +42,39 @@ function spawnCli(args, options = {}) {
   });
 }
 
+function parseCsvLine(line) {
+  const cells = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const nextCharacter = line[index + 1];
+
+    if (character === '"') {
+      if (inQuotes && nextCharacter === '"') {
+        current += '"';
+        index += 1;
+        continue;
+      }
+
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (character === ',' && !inQuotes) {
+      cells.push(current);
+      current = '';
+      continue;
+    }
+
+    current += character;
+  }
+
+  cells.push(current);
+  return cells;
+}
+
 test('inspect command lists glossary-aligned extractor commands', () => {
   const result = spawnSync(
     process.execPath,
@@ -443,6 +476,268 @@ test('extract command reuses cached Source Snapshots without live network calls'
     assert.equal(row.school_verification.status, 'source only');
     assert.equal(row.school_verification.matched_by, null);
   }
+
+  const csvPath = path.join(outputRoot, 'normalized', '2025', 'lead-dataset.csv');
+  assert.equal(fs.existsSync(csvPath), true, 'lead dataset csv missing');
+
+  const csvRows = fs.readFileSync(csvPath, 'utf8').trim().split('\n');
+  assert.equal(csvRows.length, leadArtifact.rows.length + 1);
+
+  const header = parseCsvLine(csvRows[0]);
+  assert.deepEqual(header, [
+    'program_year',
+    'retrieved_at',
+    'source_name',
+    'source_identifier',
+    'source_url',
+    'summer_rising_site_name',
+    'district_name',
+    'address',
+    'city',
+    'state',
+    'zip',
+    'summer_rising_site_grades',
+    'summer_rising_site_serves_grade_k_5',
+    'summer_rising_site_serves_grade_6_8',
+    'summer_rising_site_serves_grade_9_12',
+    'provider_name',
+    'provider_normalized_name',
+    'provider_grades',
+    'provider_serves_grade_k_5',
+    'provider_serves_grade_6_8',
+    'provider_serves_grade_9_12',
+    'provider_contact_name',
+    'provider_contact_email',
+    'provider_contact_phone_number',
+    'provider_email',
+    'provider_phone_number',
+    'provider_website',
+    'affiliated_school_name',
+    'affiliated_school_dbn',
+    'school_verification_status',
+    'school_verification_matched_by',
+    'school_verification_candidate_name',
+    'school_verification_candidate_dbn',
+    'school_verification_candidate_count',
+    'summer_rising_site_id',
+    'summer_rising_site_dbn',
+    'summer_rising_building_code',
+    'district_code',
+    'admission_process',
+    'program_id',
+    'program_code',
+    'portfolio_id',
+  ]);
+
+  const firstDataRow = parseCsvLine(csvRows[1]);
+  assert.equal(firstDataRow[0], '2025');
+  assert.equal(firstDataRow[4], `http://127.0.0.1:${port}/primary`);
+  assert.equal(firstDataRow[7], '110 CHESTER STREET, BROOKLYN, NY 11212');
+  assert.equal(firstDataRow[8], 'BROOKLYN');
+  assert.equal(firstDataRow[9], 'NY');
+  assert.equal(firstDataRow[10], '11212');
+
+  const earlyChildhoodRow = csvRows
+    .slice(1)
+    .map(parseCsvLine)
+    .find((row) => row[15] === 'District 75 Led Enrichment (from P.S. 999 Weird Grades School, 3K-2)');
+  assert.ok(earlyChildhoodRow, 'expected early childhood provider row in csv');
+  assert.equal(earlyChildhoodRow[21], '');
+  assert.equal(earlyChildhoodRow[22], '');
+  assert.equal(earlyChildhoodRow[23], '');
+  assert.equal(earlyChildhoodRow[24], 'info@provider.example.org');
+  assert.equal(earlyChildhoodRow[26], 'https://provider.example.org');
+});
+
+test('extract ignores metadata Primary Sources and captures paginated school list pages', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'summer-rising-pagination-'));
+  const fixturePath = path.join(tempRoot, 'public-source-endpoints.json');
+  const outputRoot = path.join(tempRoot, 'artifacts');
+  const capturedAt = '2026-05-14T11:15:00.000Z';
+  let port;
+
+  const buildSite = ({ address, buildingCode, districtCode, id, name, providerName, schoolName }) => ({
+    id,
+    name,
+    school: {
+      name,
+      dbn: `${districtCode}${buildingCode}SR`,
+      district: {
+        borough: 'Brooklyn',
+        code: districtCode,
+        name: `DISTRICT ${districtCode}`,
+      },
+      full_address: address,
+    },
+    programs: [
+      {
+        id: id + 1000,
+        program: {
+          code: `${buildingCode}SR1`,
+          name: providerName,
+        },
+        name: providerName,
+        provider_website: '',
+        provider_email: '',
+        provider_phone_number: '',
+        site_contact_name: '',
+        site_contact_email: '',
+        site_contact_phone_number: '',
+        grades_description: 'K to 5',
+      },
+    ],
+    grades_description: 'K to 5',
+    affiliated_schools: [schoolName],
+    admission_process: 'SR',
+    building_code: buildingCode,
+  });
+
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+
+    if (request.url === '/en/api/v2/admissionprocesses') {
+      response.end(
+        JSON.stringify({
+          count: 2,
+          results: [{ name: 'Summer Rising' }, { name: 'High School' }],
+        }),
+      );
+      return;
+    }
+
+    if (request.url === '/en/api/v2/schools/process/45/?page=1') {
+      response.end(
+        JSON.stringify({
+          count: 2,
+          next: `http://127.0.0.1:${port}/en/api/v2/schools/process/45/?page=2`,
+          previous: null,
+          results: [
+            buildSite({
+              address: '1 ALPHA STREET, BROOKLYN, NY 11201',
+              buildingCode: 'K001',
+              districtCode: '13',
+              id: 1,
+              name: 'Summer Rising at 1 ALPHA STREET (Brooklyn Heights)',
+              providerName: 'Alpha Provider (from Alpha School, K-5)',
+              schoolName: 'Alpha School',
+            }),
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (request.url === '/en/api/v2/schools/process/45/?page=2') {
+      response.end(
+        JSON.stringify({
+          count: 2,
+          next: null,
+          previous: `http://127.0.0.1:${port}/en/api/v2/schools/process/45/?page=1`,
+          results: [
+            buildSite({
+              address: '2 BRAVO STREET, BROOKLYN, NY 11202',
+              buildingCode: 'K002',
+              districtCode: '14',
+              id: 2,
+              name: 'Summer Rising at 2 BRAVO STREET (Williamsburg)',
+              providerName: 'Bravo Provider (from Bravo School, K-5)',
+              schoolName: 'Bravo School',
+            }),
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (request.url === '/en/api/v2/filters/process/45/') {
+      response.end(JSON.stringify({ results: [{ name: 'Grade' }, { name: 'Subway' }] }));
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: 'not found' }));
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  ({ port } = server.address());
+
+  fs.writeFileSync(
+    fixturePath,
+    JSON.stringify(
+      {
+        primary_sources: [
+          {
+            name: 'MySchools admission processes',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/en/api/v2/admissionprocesses`,
+            source_identifier: 'myschools-admission-processes',
+          },
+          {
+            name: 'MySchools Summer Rising school list',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/en/api/v2/schools/process/45/?page=1`,
+            source_identifier: 'myschools-summer-rising-school-list',
+          },
+          {
+            name: 'MySchools Summer Rising filters',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/en/api/v2/filters/process/45/`,
+            source_identifier: 'myschools-summer-rising-filters',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  const snapshotResult = await spawnCli(
+    ['snapshot', '--fixture', fixturePath, '--output-root', outputRoot, '--captured-at', capturedAt],
+    {
+      env: {
+        ...process.env,
+        SUMMER_RISING_PROGRAM_YEAR: '2026',
+      },
+    },
+  );
+  assert.equal(snapshotResult.status, 0, snapshotResult.stderr);
+
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+
+  const extractResult = await spawnCli(['extract', '--fixture', fixturePath, '--output-root', outputRoot], {
+    env: {
+      ...process.env,
+      SUMMER_RISING_PROGRAM_YEAR: '2026',
+    },
+  });
+  assert.equal(extractResult.status, 0, extractResult.stderr);
+
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(outputRoot, 'source-snapshots', '2026', 'manifest.json'), 'utf8'),
+  );
+  const schoolListSnapshot = manifest.sources.find(
+    (source) => source.source_identifier === 'myschools-summer-rising-school-list',
+  );
+  const schoolListRaw = JSON.parse(fs.readFileSync(path.join(outputRoot, schoolListSnapshot.raw_path), 'utf8'));
+  assert.deepEqual(schoolListRaw.page_urls, [
+    `http://127.0.0.1:${port}/en/api/v2/schools/process/45/?page=1`,
+    `http://127.0.0.1:${port}/en/api/v2/schools/process/45/?page=2`,
+  ]);
+  assert.equal(schoolListRaw.response_body.results.length, 2);
+
+  const csvPath = path.join(outputRoot, 'normalized', '2026', 'lead-dataset.csv');
+  const csvRows = fs.readFileSync(csvPath, 'utf8').trim().split('\n').map(parseCsvLine);
+  const header = csvRows[0];
+  const rows = csvRows.slice(1);
+  const sourceNameIndex = header.indexOf('source_name');
+  const siteNameIndex = header.indexOf('summer_rising_site_name');
+
+  assert.equal(rows.length, 2);
+  assert.deepEqual(new Set(rows.map((row) => row[sourceNameIndex])), new Set(['MySchools Summer Rising school list']));
+  assert.deepEqual(rows.map((row) => row[siteNameIndex]), [
+    'Summer Rising at 1 ALPHA STREET (Brooklyn Heights)',
+    'Summer Rising at 2 BRAVO STREET (Williamsburg)',
+  ]);
 });
 
 test('extract command assigns school verification statuses without removing Lead Rows', async () => {
