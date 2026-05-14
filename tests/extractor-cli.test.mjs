@@ -1333,6 +1333,282 @@ test('extract command marks school verification missing when Verification Source
   assert.equal(leadArtifact.rows[0].school_verification.candidate_count, 0);
 });
 
+test('snapshot captures affiliated-school verification candidates and extract reuses them for exact matches', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'summer-rising-verification-candidate-capture-'));
+  const fixturePath = path.join(tempRoot, 'public-source-endpoints.json');
+  const outputRoot = path.join(tempRoot, 'artifacts');
+  const capturedAt = '2026-05-14T12:15:00.000Z';
+  const verificationQueries = [];
+
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+
+    if (request.url === '/primary') {
+      response.end(
+        JSON.stringify({
+          count: 1,
+          results: [
+            {
+              id: 7001,
+              name: 'Candidate Capture Summer Rising Site',
+              school: {
+                name: 'Candidate Capture Summer Rising Site',
+                dbn: '07K700SR',
+                district: {
+                  borough: 'Brooklyn',
+                  code: '7',
+                  name: 'DISTRICT 7',
+                },
+                full_address: '700 Capture Street, Brooklyn, NY 11207',
+              },
+              programs: [
+                {
+                  id: 7101,
+                  program: {
+                    code: 'K700SRC1',
+                    name: 'Candidate Capture Provider',
+                  },
+                  grades_description: 'K to 5',
+                },
+              ],
+              grades_description: 'K to 5',
+              affiliated_schools: [
+                { name: 'Alpha Academy', dbn: '07K001' },
+                { name: 'Bravo Academy', dbn: '07K002' },
+              ],
+              admission_process: 'SR',
+              building_code: 'K700',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (request.url?.startsWith('/autocomplete')) {
+      const requestUrl = new URL(request.url, 'http://127.0.0.1');
+      const query = requestUrl.searchParams.get('q');
+      verificationQueries.push(query);
+
+      const responses = {
+        'Alpha Academy': [{ id: 9701, name: 'Alpha Academy', dbn: '07K001' }],
+        'Bravo Academy': [{ id: 9702, name: 'Bravo Academy', dbn: '07K002' }],
+      };
+
+      response.end(JSON.stringify({ record: { count: responses[query]?.length ?? 0, results: responses[query] ?? [] } }));
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end('not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  fs.writeFileSync(
+    fixturePath,
+    JSON.stringify(
+      {
+        primary_sources: [
+          {
+            name: 'Primary fixture source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/primary`,
+            source_identifier: 'primary-fixture',
+          },
+        ],
+        verification_sources: [
+          {
+            name: 'Verification autocomplete source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/autocomplete?q=Sid%20Miller%20Academy`,
+            source_identifier: 'verification-autocomplete',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  const snapshotResult = await spawnCli(
+    ['snapshot', '--fixture', fixturePath, '--output-root', outputRoot, '--captured-at', capturedAt],
+    {
+      env: {
+        ...process.env,
+        SUMMER_RISING_PROGRAM_YEAR: '2025',
+      },
+    },
+  );
+
+  assert.equal(snapshotResult.status, 0, snapshotResult.stderr);
+  assert.deepEqual(verificationQueries.sort(), ['Alpha Academy', 'Bravo Academy']);
+
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(outputRoot, 'source-snapshots', '2025', 'manifest.json'), 'utf8'),
+  );
+  const verificationSnapshots = manifest.sources.filter((source) => source.source_kind === 'Verification Source');
+  assert.equal(verificationSnapshots.length, 2);
+
+  for (const snapshot of verificationSnapshots) {
+    const rawSnapshot = JSON.parse(fs.readFileSync(path.join(outputRoot, snapshot.raw_path), 'utf8'));
+    assert.equal(rawSnapshot.program_year, '2025');
+    assert.equal(rawSnapshot.retrieved_at, capturedAt);
+    assert.equal(rawSnapshot.source_kind, 'Verification Source');
+    assert.equal(typeof rawSnapshot.url, 'string');
+    assert.equal(typeof rawSnapshot.query_metadata, 'object');
+    assert.equal(typeof rawSnapshot.query_metadata.affiliated_school_name, 'string');
+    assert.equal(typeof rawSnapshot.query_metadata.verification_query, 'string');
+  }
+
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+
+  const extractResult = await spawnCli(['extract', '--fixture', fixturePath, '--output-root', outputRoot], {
+    env: {
+      ...process.env,
+      SUMMER_RISING_PROGRAM_YEAR: '2025',
+    },
+  });
+  assert.equal(extractResult.status, 0, extractResult.stderr);
+
+  const leadArtifact = JSON.parse(
+    fs.readFileSync(path.join(outputRoot, 'normalized', '2025', 'lead-rows.json'), 'utf8'),
+  );
+  assert.equal(leadArtifact.rows.length, 1);
+  assert.equal(leadArtifact.rows[0].school_verification.status, 'verified');
+  assert.deepEqual(
+    leadArtifact.rows[0].school_verification.affiliated_school_statuses.map((status) => ({
+      name: status.affiliated_school.display_values.name,
+      status: status.school_verification.status,
+      dbn: status.school_verification.candidate?.dbn ?? null,
+    })),
+    [
+      { name: 'Alpha Academy', status: 'verified', dbn: '07K001' },
+      { name: 'Bravo Academy', status: 'verified', dbn: '07K002' },
+    ],
+  );
+});
+
+test('snapshot reuses cached affiliated-school verification candidate snapshots across reruns', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'summer-rising-verification-candidate-cache-'));
+  const fixturePath = path.join(tempRoot, 'public-source-endpoints.json');
+  const outputRoot = path.join(tempRoot, 'artifacts');
+  let primaryRequests = 0;
+  const verificationQueries = [];
+
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+
+    if (request.url === '/primary') {
+      primaryRequests += 1;
+      response.end(
+        JSON.stringify({
+          count: 1,
+          results: [
+            {
+              id: 8001,
+              name: 'Candidate Cache Summer Rising Site',
+              school: {
+                name: 'Candidate Cache Summer Rising Site',
+                dbn: '08K800SR',
+                district: {
+                  borough: 'Brooklyn',
+                  code: '8',
+                  name: 'DISTRICT 8',
+                },
+                full_address: '800 Cache Street, Brooklyn, NY 11208',
+              },
+              programs: [
+                {
+                  id: 8101,
+                  program: {
+                    code: 'K800SRC1',
+                    name: 'Candidate Cache Provider',
+                  },
+                  grades_description: 'K to 5',
+                },
+              ],
+              grades_description: 'K to 5',
+              affiliated_schools: ['Alpha Academy', 'Bravo Academy'],
+              admission_process: 'SR',
+              building_code: 'K800',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (request.url?.startsWith('/autocomplete')) {
+      const requestUrl = new URL(request.url, 'http://127.0.0.1');
+      const query = requestUrl.searchParams.get('q');
+      verificationQueries.push(query);
+      response.end(JSON.stringify({ record: { count: 0, results: [] } }));
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end('not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  fs.writeFileSync(
+    fixturePath,
+    JSON.stringify(
+      {
+        primary_sources: [
+          {
+            name: 'Primary fixture source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/primary`,
+            source_identifier: 'primary-fixture',
+          },
+        ],
+        verification_sources: [
+          {
+            name: 'Verification autocomplete source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/autocomplete?q=Sid%20Miller%20Academy`,
+            source_identifier: 'verification-autocomplete',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  const firstResult = await spawnCli(
+    ['snapshot', '--fixture', fixturePath, '--output-root', outputRoot, '--captured-at', '2026-05-14T12:20:00.000Z'],
+    {
+      env: {
+        ...process.env,
+        SUMMER_RISING_PROGRAM_YEAR: '2025',
+      },
+    },
+  );
+  assert.equal(firstResult.status, 0, firstResult.stderr);
+
+  const secondResult = await spawnCli(
+    ['snapshot', '--fixture', fixturePath, '--output-root', outputRoot, '--captured-at', '2026-05-15T08:00:00.000Z'],
+    {
+      env: {
+        ...process.env,
+        SUMMER_RISING_PROGRAM_YEAR: '2025',
+      },
+    },
+  );
+
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+
+  assert.equal(secondResult.status, 0, secondResult.stderr);
+  assert.equal(primaryRequests, 2);
+  assert.deepEqual(verificationQueries.sort(), ['Alpha Academy', 'Bravo Academy']);
+});
+
 test('snapshot command uses low concurrency by default', async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'summer-rising-rate-limit-'));
   const fixturePath = path.join(tempRoot, 'public-source-endpoints.json');

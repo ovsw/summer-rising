@@ -149,6 +149,10 @@ type SchoolVerification = {
 };
 type RawSourceSnapshot = {
   page_urls?: string[];
+  query_metadata?: {
+    affiliated_school_name?: string;
+    verification_query?: string;
+  };
   response_body: unknown;
 };
 const leadDatasetColumns = [
@@ -297,13 +301,15 @@ function runInspect(fixturePath: string) {
 }
 
 async function captureSourceSnapshot(args: {
+  cacheKey?: string;
   capturedAt: string;
   outputRoot: string;
   programYear: string;
+  queryMetadata?: RawSourceSnapshot['query_metadata'];
   source: DiscoverySource;
   sourceKind: SourceKind;
 }) {
-  const { capturedAt, outputRoot, programYear, source, sourceKind } = args;
+  const { cacheKey, capturedAt, outputRoot, programYear, queryMetadata, source, sourceKind } = args;
   const url = source.url;
 
   if (source.auth !== 'public') {
@@ -314,15 +320,34 @@ async function captureSourceSnapshot(args: {
     throw new Error(`Snapshot source ${source.name ?? 'unknown'} is missing a url.`);
   }
 
-  const fetched = await fetchSourceResponseBody({ sourceKind, url });
-
   const rawDirectory = path.join(outputRoot, 'source-snapshots', 'raw', programYear);
   ensureDirectory(rawDirectory);
 
   const datePrefix = capturedAt.slice(0, 10);
   const slug = slugify(source.source_identifier ?? source.name ?? url);
-  const fileName = `${datePrefix}-${slug}.json`;
+  const fileName = cacheKey ? `${slugify(cacheKey)}.json` : `${datePrefix}-${slug}.json`;
   const rawPath = path.join(rawDirectory, fileName);
+
+  if (cacheKey && fs.existsSync(rawPath)) {
+    const cachedSnapshot = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as {
+      name?: string;
+      retrieved_at?: string;
+      source_identifier?: string;
+      source_kind?: SourceKind;
+      url?: string;
+    };
+
+    return {
+      name: cachedSnapshot.name ?? source.name ?? slug,
+      raw_path: path.relative(outputRoot, rawPath),
+      retrieved_at: cachedSnapshot.retrieved_at ?? capturedAt,
+      source_identifier: cachedSnapshot.source_identifier ?? source.source_identifier ?? slug,
+      source_kind: cachedSnapshot.source_kind ?? sourceKind,
+      url: cachedSnapshot.url ?? url,
+    };
+  }
+
+  const fetched = await fetchSourceResponseBody({ sourceKind, url });
 
   fs.writeFileSync(
     rawPath,
@@ -331,6 +356,7 @@ async function captureSourceSnapshot(args: {
         name: source.name ?? slug,
         page_urls: fetched.pageUrls,
         program_year: programYear,
+        query_metadata: queryMetadata,
         response_body: fetched.responseBody,
         retrieved_at: capturedAt,
         source_identifier: source.source_identifier ?? null,
@@ -434,23 +460,33 @@ async function runSnapshot(args: {
 }) {
   const { capturedAt, fixturePath, outputRoot, programYear } = args;
   const fixture = loadFixture(fixturePath);
-  const sources = [
-    ...(fixture.primary_sources ?? []).map((source) => ({ source, sourceKind: 'Primary Source' as const })),
-    ...(fixture.verification_sources ?? []).map((source) => ({
-      source,
-      sourceKind: 'Verification Source' as const,
-    })),
-  ];
-
   const manifestSources = [];
-  for (const entry of sources) {
+  for (const source of fixture.primary_sources ?? []) {
     manifestSources.push(
       await captureSourceSnapshot({
         capturedAt,
         outputRoot,
         programYear,
+        source,
+        sourceKind: 'Primary Source',
+      }),
+    );
+  }
+
+  for (const entry of buildVerificationCapturePlan({
+    outputRoot,
+    primarySources: manifestSources.filter((source) => source.source_kind === 'Primary Source'),
+    verificationSources: fixture.verification_sources ?? [],
+  })) {
+    manifestSources.push(
+      await captureSourceSnapshot({
+        cacheKey: entry.cacheKey,
+        capturedAt,
+        outputRoot,
+        programYear,
+        queryMetadata: entry.queryMetadata,
         source: entry.source,
-        sourceKind: entry.sourceKind,
+        sourceKind: 'Verification Source',
       }),
     );
   }
@@ -476,6 +512,94 @@ async function runSnapshot(args: {
   );
 
   console.log(`Captured ${manifestSources.length} Source Snapshots for program year ${programYear}.`);
+}
+
+function buildVerificationCapturePlan(args: {
+  outputRoot: string;
+  primarySources: SourceSnapshotManifest['sources'];
+  verificationSources: DiscoverySource[];
+}): Array<{
+  cacheKey?: string;
+  queryMetadata?: RawSourceSnapshot['query_metadata'];
+  source: DiscoverySource;
+}> {
+  const { outputRoot, primarySources, verificationSources } = args;
+  const affiliatedSchoolNames = collectAffiliatedSchoolNamesFromPrimarySnapshots({
+    outputRoot,
+    primarySources,
+  });
+
+  return verificationSources.flatMap((source) => {
+    if (!isVerificationQueryTemplate(source.url)) {
+      return [{ source }];
+    }
+
+    return affiliatedSchoolNames.map((affiliatedSchoolName) => ({
+      cacheKey: `${source.source_identifier ?? source.name ?? 'verification-source'}-${affiliatedSchoolName}`,
+      queryMetadata: {
+        affiliated_school_name: affiliatedSchoolName,
+        verification_query: affiliatedSchoolName,
+      },
+      source: buildVerificationQuerySource(source, affiliatedSchoolName),
+    }));
+  });
+}
+
+function collectAffiliatedSchoolNamesFromPrimarySnapshots(args: {
+  outputRoot: string;
+  primarySources: SourceSnapshotManifest['sources'];
+}) {
+  const { outputRoot, primarySources } = args;
+  const names = new Set<string>();
+
+  for (const source of primarySources) {
+    const rawPath = path.join(outputRoot, source.raw_path);
+    const rawSnapshot = JSON.parse(fs.readFileSync(rawPath, 'utf8')) as RawSourceSnapshot;
+    const records = parsePrimarySourceSnapshot({
+      rawPath: source.raw_path,
+      responseBody: rawSnapshot.response_body,
+      sourceIdentifier: source.source_identifier,
+      sourceName: source.name,
+      url: source.url,
+    });
+
+    for (const record of records) {
+      for (const affiliatedSchool of record.affiliated_schools) {
+        const schoolName = affiliatedSchool.display_values.name;
+        if (schoolName) {
+          names.add(schoolName);
+        }
+      }
+    }
+  }
+
+  return [...names];
+}
+
+function isVerificationQueryTemplate(url: string | undefined) {
+  if (!url) {
+    return false;
+  }
+
+  const parsedUrl = new URL(url);
+  return parsedUrl.searchParams.has('q');
+}
+
+function buildVerificationQuerySource(source: DiscoverySource, affiliatedSchoolName: string): DiscoverySource {
+  const url = source.url;
+  if (!url) {
+    return source;
+  }
+
+  const parsedUrl = new URL(url);
+  parsedUrl.searchParams.set('q', affiliatedSchoolName);
+
+  return {
+    ...source,
+    name: `${source.name ?? 'Verification Source'} for ${affiliatedSchoolName}`,
+    source_identifier: `${source.source_identifier ?? slugify(source.name ?? 'verification-source')}--${slugify(affiliatedSchoolName)}`,
+    url: parsedUrl.toString(),
+  };
 }
 
 function runExtract(args: { fixturePath: string; outputRoot: string }) {
@@ -766,9 +890,12 @@ function parseVerificationSourceSnapshot(args: {
 }): VerificationCandidate[] {
   const { responseBody, sourceIdentifier, sourceName } = args;
   const payload = readObject(responseBody);
+  const record = readObject(payload.record);
   const results = readArray(payload.results).length > 0
     ? readArray(payload.results)
-    : readArray(payload.schools);
+    : readArray(payload.schools).length > 0
+      ? readArray(payload.schools)
+      : readArray(record.results);
 
   return results.map((rawCandidate) => {
     const candidate = readObject(rawCandidate);
