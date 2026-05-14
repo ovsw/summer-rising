@@ -1,0 +1,9 @@
+{
+  "captured_at": "2026-05-14",
+  "source_url": "https://www.schools.nyc.gov/enrollment/enroll-grade-by-grade/3k/enrollment---find-a-school-public-school",
+  "record": {
+    "surface": "Public NYC Public Schools page",
+    "observed_behavior": "The page directs families to MySchools for the actual school lookup and waitlist workflow.",
+    "structured_json_endpoint_confirmed": false
+  }
+}

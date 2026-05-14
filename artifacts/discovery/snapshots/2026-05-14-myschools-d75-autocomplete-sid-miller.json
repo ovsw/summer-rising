@@ -1,0 +1,24 @@
+{
+  "captured_at": "2026-05-14",
+  "source_url": "https://www.myschools.nyc/en/api/v2/schools/process/46/autocomplete/?q=Sid%20Miller%20Academy",
+  "record": {
+    "count": 10,
+    "results": [
+      {
+        "id": 88881,
+        "name": "Sid Miller Academy (75K396) @ 531 Albany Avenue",
+        "dbn": "75K091"
+      },
+      {
+        "id": 88869,
+        "name": "Sid Miller Academy (75K396) @ 110 Chester Street",
+        "dbn": "75K110"
+      },
+      {
+        "id": 87784,
+        "name": "Sid Miller Academy (75K396) @ 210 Chester Street",
+        "dbn": "75K396"
+      }
+    ]
+  }
+}

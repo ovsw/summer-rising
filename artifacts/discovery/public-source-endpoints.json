@@ -1,0 +1,213 @@
+{
+  "captured_at": "2026-05-14",
+  "program_year": 2026,
+  "primary_sources": [
+    {
+      "name": "MySchools admission processes",
+      "url": "https://www.myschools.nyc/en/api/v2/admissionprocesses",
+      "auth": "public",
+      "request_shape": "GET, no query params required.",
+      "response_shape_summary": "Paginated JSON with one record per public admissions process, including process id, name, short_name, and school_list URL.",
+      "field_coverage": [
+        "program_year context",
+        "admission process id",
+        "admission process name",
+        "school list endpoint discovery"
+      ],
+      "snapshot_path": "artifacts/discovery/snapshots/2026-05-14-myschools-admissionprocesses-summer-rising.json"
+    },
+    {
+      "name": "MySchools Summer Rising school list",
+      "url": "https://www.myschools.nyc/en/api/v2/schools/process/45/?page=1",
+      "auth": "public",
+      "request_shape": "GET with process id in path. Optional pagination via ?page=. Optional public search/filter params are used by the web app.",
+      "response_shape_summary": "Paginated JSON with one Summer Rising site per result. Each result includes site identity, address, district, borough, building code, contact fields, affiliated_schools, and nested program rows with provider and site contact fields.",
+      "field_coverage": [
+        "summer_rising_site",
+        "site_dbn",
+        "district",
+        "borough",
+        "site_address",
+        "building_code",
+        "grade_range",
+        "provider_name",
+        "provider_website",
+        "provider_email",
+        "provider_phone_number",
+        "site_contact_name",
+        "site_contact_email",
+        "site_contact_phone_number",
+        "affiliated_school_name",
+        "program_code",
+        "portfolio_id",
+        "start_date",
+        "end_date",
+        "start_time",
+        "end_time",
+        "accessibility"
+      ],
+      "snapshot_path": "artifacts/discovery/snapshots/2026-05-14-myschools-summer-rising-site-sample.json"
+    },
+    {
+      "name": "MySchools Summer Rising filters",
+      "url": "https://www.myschools.nyc/en/api/v2/filters/process/45/",
+      "auth": "public",
+      "request_shape": "GET with process id in path.",
+      "response_shape_summary": "JSON describing the public filter metadata used by the Summer Rising UI, including borough and availability filter options.",
+      "field_coverage": [
+        "borough filter values",
+        "seat availability filter values",
+        "UI filter metadata"
+      ],
+      "snapshot_path": "artifacts/discovery/snapshots/2026-05-14-myschools-summer-rising-filters.json"
+    }
+  ],
+  "verification_sources": [
+    {
+      "name": "MySchools District 75 autocomplete lookup",
+      "url": "https://www.myschools.nyc/en/api/v2/schools/process/46/autocomplete/?q=Sid%20Miller%20Academy",
+      "auth": "public",
+      "request_shape": "GET with process id in path and ?q=<school name> search term.",
+      "response_shape_summary": "JSON autocomplete results with candidate public school directory records. Each result includes directory school id, display name, and DBN.",
+      "field_coverage": [
+        "affiliated_school_name",
+        "affiliated_school_dbn candidate",
+        "directory school id candidate"
+      ],
+      "snapshot_path": "artifacts/discovery/snapshots/2026-05-14-myschools-d75-autocomplete-sid-miller.json"
+    },
+    {
+      "name": "NYC Public Schools Find a School public page",
+      "url": "https://www.schools.nyc.gov/enrollment/enroll-grade-by-grade/3k/enrollment---find-a-school-public-school",
+      "auth": "public",
+      "request_shape": "Public web page load in browser, no login.",
+      "response_shape_summary": "Public NYC Public Schools content page that routes families to MySchools for the actual lookup workflow. Useful as the public verification surface, but no separate unauthenticated structured JSON endpoint was confirmed in this slice.",
+      "field_coverage": [
+        "lookup surface confirmation",
+        "public routing to MySchools"
+      ],
+      "snapshot_path": "artifacts/discovery/snapshots/2026-05-14-nycps-find-a-school-page.json"
+    }
+  ],
+  "field_availability_matrix": [
+    {
+      "field": "summer_rising_site",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].name"
+    },
+    {
+      "field": "site_dbn",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].school.dbn"
+    },
+    {
+      "field": "provider_name",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].name"
+    },
+    {
+      "field": "site_contact_name",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].site_contact_name"
+    },
+    {
+      "field": "site_contact_email",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].site_contact_email"
+    },
+    {
+      "field": "site_contact_phone_number",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].site_contact_phone_number"
+    },
+    {
+      "field": "provider_website",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].provider_website"
+    },
+    {
+      "field": "provider_email",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].provider_email"
+    },
+    {
+      "field": "provider_phone_number",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].provider_phone_number"
+    },
+    {
+      "field": "grade_range",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].grades_description and results[].programs[].grades_description"
+    },
+    {
+      "field": "district",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].school.district.name / code"
+    },
+    {
+      "field": "borough",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].school.district.borough"
+    },
+    {
+      "field": "site_address",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].school.full_address"
+    },
+    {
+      "field": "building_code",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].building_code"
+    },
+    {
+      "field": "affiliated_school_name",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].affiliated_schools[]"
+    },
+    {
+      "field": "affiliated_school_dbn",
+      "classification": "Verification Source",
+      "source": "MySchools District 75 autocomplete lookup",
+      "path": "results[].dbn",
+      "note": "Requires deterministic or reviewable name matching against the primary affiliated school string."
+    },
+    {
+      "field": "program_code",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].program.code"
+    },
+    {
+      "field": "portfolio_id",
+      "classification": "Primary Source",
+      "source": "MySchools Summer Rising school list",
+      "path": "results[].programs[].portfolio_id"
+    },
+    {
+      "field": "principal_or_school_admin_contact",
+      "classification": "Missing",
+      "source": "Not pursued in v1 per PRD",
+      "path": null
+    }
+  ],
+  "browser_fallback": {
+    "needed_for_core_fields": false,
+    "notes": "Core site, provider, contact, grade, district, address, and affiliated school name fields are already exposed in public JSON. Keep browser inspection available for future manual verification or for any public visible field that appears on a profile page but is not confirmed through JSON."
+  }
+}

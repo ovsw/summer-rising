@@ -1,0 +1,10 @@
+{
+  "captured_at": "2026-05-14",
+  "source_url": "https://www.myschools.nyc/en/api/v2/admissionprocesses",
+  "record": {
+    "id": 45,
+    "name": "Summer Rising",
+    "short_name": "SR",
+    "school_list": "http://www.myschools.nyc/en/api/v2/schools/process/45/"
+  }
+}

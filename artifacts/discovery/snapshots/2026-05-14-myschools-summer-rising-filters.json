@@ -1,0 +1,28 @@
+{
+  "captured_at": "2026-05-14",
+  "source_url": "https://www.myschools.nyc/en/api/v2/filters/process/45/",
+  "record": {
+    "count": 6,
+    "filter_groups": [
+      "Need a Seat Now?",
+      "Borough",
+      "Program Features",
+      "Accessibility",
+      "Languages",
+      "Admissions Method"
+    ],
+    "example_options": {
+      "Need a Seat Now?": [
+        "May have available K-5 seats",
+        "May have available 6-8 seats"
+      ],
+      "Borough": [
+        "Bronx",
+        "Brooklyn",
+        "Manhattan",
+        "Queens",
+        "Staten Island"
+      ]
+    }
+  }
+}

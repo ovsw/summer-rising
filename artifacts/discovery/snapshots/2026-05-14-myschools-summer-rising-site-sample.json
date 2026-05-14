@@ -1,0 +1,82 @@
+{
+  "captured_at": "2026-05-14",
+  "source_url": "https://www.myschools.nyc/en/api/v2/schools/process/45/?page=1",
+  "record": {
+    "id": 110929,
+    "name": "District 75 Led Enrichment at 110 CHESTER STREET (Brownsville)",
+    "school": {
+      "name": "District 75 Led Enrichment at 110 CHESTER STREET (Brownsville)",
+      "dbn": "23K396SR",
+      "accessibility": "Fully Accessible",
+      "school_year": "2025-26 School Year",
+      "district": {
+        "borough": "Brooklyn",
+        "code": "23",
+        "name": "DISTRICT 23"
+      },
+      "full_address": "110 CHESTER STREET, BROOKLYN, NY 11212"
+    },
+    "programs": [
+      {
+        "id": 128038,
+        "program": {
+          "code": "K396SRMS1",
+          "name": "District 75 Led Enrichment (from Sid Miller Academy, 6-8)"
+        },
+        "name": "District 75 Led Enrichment (from Sid Miller Academy, 6-8)",
+        "description": "District 75 staff will provide engaging enrichment activities for District 75 students. This program is exclusively for District 75 students in Brooklyn after their IEP recommended instructional day.",
+        "start_date": "2026-07-01",
+        "end_date": "2026-08-07",
+        "start_time": "8:00am",
+        "end_time": "6:00pm",
+        "provider_website": "",
+        "provider_email": "",
+        "provider_phone_number": "",
+        "site_contact_name": "Chana Max",
+        "site_contact_email": "cmax@schools.nyc.gov",
+        "site_contact_phone_number": "(718) 385-6200",
+        "portfolio_id": "K396SR2",
+        "grades_description": "6 to 8"
+      },
+      {
+        "id": 128037,
+        "program": {
+          "code": "K396SRES1",
+          "name": "District 75 Led Enrichment (from Sid Miller Academy, K-5)"
+        },
+        "name": "District 75 Led Enrichment (from Sid Miller Academy, K-5)",
+        "start_date": "2026-07-01",
+        "end_date": "2026-08-14",
+        "start_time": "8:00am",
+        "end_time": "6:00pm",
+        "provider_website": "",
+        "provider_email": "",
+        "provider_phone_number": "",
+        "site_contact_name": "Chana Max",
+        "site_contact_email": "cmax@schools.nyc.gov",
+        "site_contact_phone_number": "(718) 385-6200",
+        "portfolio_id": "K396SR1",
+        "grades_description": "K to 5"
+      }
+    ],
+    "grades_description": "K to 5; 6 to 8",
+    "other_features": [
+      "1st Grade Seats Summer Rising",
+      "2nd Grade Seats Summer Rising",
+      "3rd Grade Seats Summer Rising",
+      "4th Grade Seats Summer Rising",
+      "5th Grade Seats Summer Rising",
+      "6th Grade Seats Summer Rising",
+      "7th Grade Seats Summer Rising",
+      "8th Grade Seats Summer Rising",
+      "Kindergarten Seats Summer Rising",
+      "May have available 6-8 seats",
+      "May have available K-5 seats"
+    ],
+    "affiliated_schools": [
+      "Sid Miller Academy (K-8)"
+    ],
+    "admission_process": "SR",
+    "building_code": "K396"
+  }
+}
