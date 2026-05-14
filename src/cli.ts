@@ -106,8 +106,9 @@ type GradeBuckets = {
   serves_grade_9_12: boolean;
   serves_grade_k_5: boolean;
 };
+type AffiliatedSchool = ParsedPrimarySourceRecord['affiliated_schools'][number];
 type LeadRow = {
-  affiliated_school: ParsedPrimarySourceRecord['affiliated_schools'][number];
+  affiliated_schools: AffiliatedSchool[];
   program_year: string;
   provider: ParsedPrimarySourceRecord['providers'][number] & {
     grade_buckets: GradeBuckets;
@@ -132,6 +133,15 @@ type VerificationCandidate = {
   source_name: string;
 };
 type SchoolVerification = {
+  affiliated_school_statuses: Array<{
+    affiliated_school: AffiliatedSchool;
+    school_verification: {
+      candidate: VerificationCandidate | null;
+      candidate_count: number;
+      matched_by: 'exact public id/code' | 'fuzzy name' | 'normalized address plus borough/zip' | null;
+      status: VerificationStatus;
+    };
+  }>;
   candidate: VerificationCandidate | null;
   candidate_count: number;
   matched_by: 'exact public id/code' | 'fuzzy name' | 'normalized address plus borough/zip' | null;
@@ -590,9 +600,18 @@ function buildLeadRows(args: {
         website: null,
       }];
 
-  return providers.flatMap((provider) =>
-    affiliatedSchools.map((affiliatedSchool) => ({
+  return providers.map((provider) => {
+    const affiliatedSchoolStatuses = affiliatedSchools.map((affiliatedSchool) => ({
       affiliated_school: affiliatedSchool,
+      school_verification: determineSchoolVerification({
+        affiliatedSchool,
+        summerRisingSite: record.summer_rising_site,
+        verificationCandidates,
+      }),
+    }));
+
+    return {
+      affiliated_schools: affiliatedSchools,
       program_year: programYear,
       provider: {
         ...provider,
@@ -600,18 +619,14 @@ function buildLeadRows(args: {
         normalized_name: normalizeProviderName(provider.display_values.name),
       },
       retrieved_at: retrievedAt,
-      school_verification: determineSchoolVerification({
-        affiliatedSchool,
-        summerRisingSite: record.summer_rising_site,
-        verificationCandidates,
-      }),
+      school_verification: summarizeSchoolVerification(affiliatedSchoolStatuses),
       source: record.source,
       summer_rising_site: {
         ...record.summer_rising_site,
         grade_buckets: normalizeGradeBuckets(record.summer_rising_site.display_values.grades_description),
       },
-    })),
-  );
+    };
+  });
 }
 
 function parsePrimarySourceSnapshot(args: {
@@ -912,6 +927,7 @@ function determineSchoolVerification(args: {
 
   if (verificationCandidates.length === 0) {
     return {
+      affiliated_school_statuses: [],
       candidate: null,
       candidate_count: 0,
       matched_by: null,
@@ -936,6 +952,7 @@ function determineSchoolVerification(args: {
 
   if (exactMatches.length === 1) {
     return {
+      affiliated_school_statuses: [],
       candidate: exactMatches[0],
       candidate_count: 1,
       matched_by: 'exact public id/code',
@@ -945,6 +962,7 @@ function determineSchoolVerification(args: {
 
   if (exactMatches.length > 1) {
     return {
+      affiliated_school_statuses: [],
       candidate: exactMatches[0],
       candidate_count: exactMatches.length,
       matched_by: 'exact public id/code',
@@ -971,6 +989,7 @@ function determineSchoolVerification(args: {
 
   if (addressMatches.length === 1) {
     return {
+      affiliated_school_statuses: [],
       candidate: addressMatches[0],
       candidate_count: 1,
       matched_by: 'normalized address plus borough/zip',
@@ -980,6 +999,7 @@ function determineSchoolVerification(args: {
 
   if (addressMatches.length > 1) {
     return {
+      affiliated_school_statuses: [],
       candidate: addressMatches[0],
       candidate_count: addressMatches.length,
       matched_by: 'normalized address plus borough/zip',
@@ -995,6 +1015,7 @@ function determineSchoolVerification(args: {
 
   if (fuzzyMatches.length === 1) {
     return {
+      affiliated_school_statuses: [],
       candidate: fuzzyMatches[0],
       candidate_count: 1,
       matched_by: 'fuzzy name',
@@ -1004,6 +1025,7 @@ function determineSchoolVerification(args: {
 
   if (fuzzyMatches.length > 1) {
     return {
+      affiliated_school_statuses: [],
       candidate: fuzzyMatches[0],
       candidate_count: fuzzyMatches.length,
       matched_by: 'fuzzy name',
@@ -1012,11 +1034,51 @@ function determineSchoolVerification(args: {
   }
 
   return {
+    affiliated_school_statuses: [],
     candidate: null,
     candidate_count: 0,
     matched_by: null,
     status: 'source only',
   };
+}
+
+function summarizeSchoolVerification(
+  affiliatedSchoolStatuses: SchoolVerification['affiliated_school_statuses'],
+): SchoolVerification {
+  const highestActionStatus = [...affiliatedSchoolStatuses].sort((left, right) =>
+    verificationStatusRank(right.school_verification.status) -
+      verificationStatusRank(left.school_verification.status))[0]?.school_verification ?? {
+        affiliated_school_statuses: [],
+        candidate: null,
+        candidate_count: 0,
+        matched_by: null,
+        status: 'missing' as const,
+      };
+
+  return {
+    affiliated_school_statuses: affiliatedSchoolStatuses,
+    candidate: highestActionStatus.candidate,
+    candidate_count: highestActionStatus.candidate_count,
+    matched_by: highestActionStatus.matched_by,
+    status: highestActionStatus.status,
+  };
+}
+
+function verificationStatusRank(value: VerificationStatus) {
+  switch (value) {
+    case 'needs review':
+      return 5;
+    case 'suggested match':
+      return 4;
+    case 'source only':
+      return 3;
+    case 'missing':
+      return 2;
+    case 'verified':
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 function normalizeGradeBuckets(value: string | null): GradeBuckets {
@@ -1044,6 +1106,12 @@ function serializeLeadDatasetCsv(rows: LeadRow[]) {
 
 function toLeadDatasetCsvRow(row: LeadRow): LeadDatasetCsvRow {
   const addressParts = splitAddressParts(row.summer_rising_site.display_values.full_address);
+  const affiliatedSchoolNames = row.affiliated_schools
+    .map((school) => school.display_values.name)
+    .filter((value): value is string => value !== null);
+  const affiliatedSchoolDbns = row.affiliated_schools
+    .map((school) => school.public_ids.affiliated_school_dbn)
+    .filter((value): value is string => value !== null);
 
   return {
     program_year: row.program_year,
@@ -1073,8 +1141,8 @@ function toLeadDatasetCsvRow(row: LeadRow): LeadDatasetCsvRow {
     provider_email: formatCsvValue(row.provider.email),
     provider_phone_number: formatCsvValue(row.provider.phone_number),
     provider_website: formatCsvValue(row.provider.website),
-    affiliated_school_name: formatCsvValue(row.affiliated_school.display_values.name),
-    affiliated_school_dbn: formatCsvValue(row.affiliated_school.public_ids.affiliated_school_dbn),
+    affiliated_school_name: formatCsvValue(joinDelimitedValues(affiliatedSchoolNames)),
+    affiliated_school_dbn: formatCsvValue(joinDelimitedValues(affiliatedSchoolDbns)),
     school_verification_status: row.school_verification.status,
     school_verification_matched_by: formatCsvValue(row.school_verification.matched_by),
     school_verification_candidate_name: formatCsvValue(row.school_verification.candidate?.name ?? null),
@@ -1126,6 +1194,10 @@ function formatCsvNumber(value: number | null) {
 
 function formatCsvBoolean(value: boolean) {
   return value ? 'true' : 'false';
+}
+
+function joinDelimitedValues(values: string[]) {
+  return values.length === 0 ? null : values.join(' | ');
 }
 
 function escapeCsvValue(value: string) {

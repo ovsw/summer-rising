@@ -426,7 +426,7 @@ test('extract command reuses cached Source Snapshots without live network calls'
   const leadArtifact = JSON.parse(fs.readFileSync(leadRowsPath, 'utf8'));
   assert.equal(leadArtifact.program_year, '2025');
   assert.equal(leadArtifact.retrieved_at, capturedAt);
-  assert.equal(leadArtifact.rows.length, 4);
+  assert.equal(leadArtifact.rows.length, 2);
 
   const normalizedProviderNames = new Set();
   const affiliatedSchoolNames = new Set();
@@ -441,10 +441,13 @@ test('extract command reuses cached Source Snapshots without live network calls'
     assert.equal(row.summer_rising_site.public_ids.site_id, 110929);
     assert.equal(typeof row.provider.display_values.name, 'string');
     assert.equal(typeof row.provider.normalized_name, 'string');
-    assert.equal(typeof row.affiliated_school.display_values.name, 'string');
+    assert.equal(Array.isArray(row.affiliated_schools), true);
+    assert.equal(row.affiliated_schools.length, 2);
 
     normalizedProviderNames.add(row.provider.normalized_name);
-    affiliatedSchoolNames.add(row.affiliated_school.display_values.name);
+    for (const school of row.affiliated_schools) {
+      affiliatedSchoolNames.add(school.display_values.name);
+    }
   }
 
   assert.deepEqual(Array.from(normalizedProviderNames), ['district 75 led enrichment']);
@@ -456,9 +459,9 @@ test('extract command reuses cached Source Snapshots without live network calls'
   const middleSchoolRows = leadArtifact.rows.filter(
     (row) => row.provider.display_values.grades_description === '6 to 8',
   );
-  assert.equal(middleSchoolRows.length, 2);
+  assert.equal(middleSchoolRows.length, 1);
   assert.deepEqual(
-    middleSchoolRows.map((row) => row.affiliated_school.display_values.name).sort(),
+    middleSchoolRows[0].affiliated_schools.map((school) => school.display_values.name).sort(),
     ['P.S. 999 Weird Grades School', 'Sid Miller Academy (K-8)'],
   );
 
@@ -542,6 +545,11 @@ test('extract command reuses cached Source Snapshots without live network calls'
     .map(parseCsvLine)
     .find((row) => row[15] === 'District 75 Led Enrichment (from P.S. 999 Weird Grades School, 3K-2)');
   assert.ok(earlyChildhoodRow, 'expected early childhood provider row in csv');
+  assert.equal(
+    earlyChildhoodRow[27],
+    'Sid Miller Academy (K-8) | P.S. 999 Weird Grades School',
+  );
+  assert.equal(earlyChildhoodRow[28], '');
   assert.equal(earlyChildhoodRow[21], '');
   assert.equal(earlyChildhoodRow[22], '');
   assert.equal(earlyChildhoodRow[23], '');
@@ -1009,7 +1017,7 @@ test('extract command assigns school verification statuses without removing Lead
   assert.equal(leadArtifact.rows.length, 5);
 
   const rowsBySchoolName = new Map(
-    leadArtifact.rows.map((row) => [row.affiliated_school.display_values.name, row]),
+    leadArtifact.rows.map((row) => [row.affiliated_schools[0].display_values.name, row]),
   );
 
   assert.equal(rowsBySchoolName.get('Exact Match Academy').school_verification.status, 'verified');
@@ -1040,6 +1048,178 @@ test('extract command assigns school verification statuses without removing Lead
   assert.equal(rowsBySchoolName.get('No Match Academy').school_verification.status, 'source only');
   assert.equal(rowsBySchoolName.get('No Match Academy').school_verification.matched_by, null);
   assert.equal(rowsBySchoolName.get('No Match Academy').school_verification.candidate, null);
+});
+
+test('extract command summarizes mixed affiliated school verification at provider row grain', async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'summer-rising-school-verification-summary-'));
+  const fixturePath = path.join(tempRoot, 'public-source-endpoints.json');
+  const outputRoot = path.join(tempRoot, 'artifacts');
+  const capturedAt = '2026-05-14T12:00:00.000Z';
+
+  const server = http.createServer((request, response) => {
+    response.setHeader('content-type', 'application/json');
+
+    if (request.url === '/primary') {
+      response.end(
+        JSON.stringify({
+          count: 1,
+          results: [
+            {
+              id: 3001,
+              name: 'Summary Status Summer Rising Site',
+              school: {
+                name: 'Summary Status Summer Rising Site',
+                dbn: '03K001SR',
+                district: {
+                  borough: 'Brooklyn',
+                  code: '3',
+                  name: 'DISTRICT 3',
+                },
+                full_address: '1 Summary Street, Brooklyn, NY 11201',
+              },
+              programs: [
+                {
+                  id: 4001,
+                  program: {
+                    code: 'K001SR1',
+                    name: 'Summary Provider',
+                  },
+                  grades_description: 'K to 5',
+                },
+              ],
+              grades_description: 'K to 5',
+              affiliated_schools: [
+                { name: 'Verified Academy', dbn: '03K123' },
+                { name: 'Ambiguous Academy' },
+              ],
+              admission_process: 'SR',
+              building_code: 'K001',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    if (request.url === '/verification') {
+      response.end(
+        JSON.stringify({
+          results: [
+            {
+              id: 9301,
+              name: 'Different Name',
+              dbn: '03K123',
+              address: '99 Elsewhere Street, Brooklyn, NY 11215',
+              borough: 'Brooklyn',
+              zip: '11215',
+            },
+            {
+              id: 9302,
+              name: 'Ambiguous Academy',
+              dbn: '03K200',
+            },
+            {
+              id: 9303,
+              name: 'Ambiguous Academy at Annex',
+              dbn: '03K201',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+
+    response.statusCode = 404;
+    response.end('not found');
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  fs.writeFileSync(
+    fixturePath,
+    JSON.stringify(
+      {
+        primary_sources: [
+          {
+            name: 'Primary fixture source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/primary`,
+            source_identifier: 'primary-fixture',
+          },
+        ],
+        verification_sources: [
+          {
+            name: 'Verification fixture source',
+            auth: 'public',
+            url: `http://127.0.0.1:${port}/verification`,
+            source_identifier: 'verification-fixture',
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+
+  const snapshotResult = await spawnCli(
+    [
+      'snapshot',
+      '--fixture',
+      fixturePath,
+      '--output-root',
+      outputRoot,
+      '--captured-at',
+      capturedAt,
+    ],
+    {
+      env: {
+        ...process.env,
+        SUMMER_RISING_PROGRAM_YEAR: '2025',
+      },
+    },
+  );
+
+  assert.equal(snapshotResult.status, 0, snapshotResult.stderr);
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+
+  const extractResult = await spawnCli(['extract', '--fixture', fixturePath, '--output-root', outputRoot], {
+    env: {
+      ...process.env,
+      SUMMER_RISING_PROGRAM_YEAR: '2025',
+    },
+  });
+
+  assert.equal(extractResult.status, 0, extractResult.stderr);
+
+  const leadRowsPath = path.join(outputRoot, 'normalized', '2025', 'lead-rows.json');
+  const leadArtifact = JSON.parse(fs.readFileSync(leadRowsPath, 'utf8'));
+  assert.equal(leadArtifact.rows.length, 1);
+
+  const [row] = leadArtifact.rows;
+  assert.deepEqual(
+    row.affiliated_schools.map((school) => school.display_values.name),
+    ['Verified Academy', 'Ambiguous Academy'],
+  );
+  assert.equal(row.school_verification.status, 'needs review');
+  assert.equal(row.school_verification.matched_by, 'fuzzy name');
+  assert.equal(row.school_verification.candidate_count, 2);
+  assert.deepEqual(
+    row.school_verification.affiliated_school_statuses.map((status) => ({
+      name: status.affiliated_school.display_values.name,
+      status: status.school_verification.status,
+    })),
+    [
+      {
+        name: 'Verified Academy',
+        status: 'verified',
+      },
+      {
+        name: 'Ambiguous Academy',
+        status: 'needs review',
+      },
+    ],
+  );
 });
 
 test('extract command marks school verification missing when Verification Source data is unavailable', async () => {
