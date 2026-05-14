@@ -1,0 +1,18 @@
+{
+  "name": "summer-rising-extractor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test",
+    "inspect": "node --experimental-strip-types ./src/cli.ts inspect",
+    "snapshot": "node --experimental-strip-types ./src/cli.ts snapshot",
+    "extract": "node --experimental-strip-types ./src/cli.ts extract",
+    "validate": "node --experimental-strip-types ./src/cli.ts validate"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3"
+  }
+}
