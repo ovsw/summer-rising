@@ -15,7 +15,7 @@ The extractor will output a CSV as the primary deliverable, preserve raw source 
 ## User Stories
 
 1. As a sales operator, I want a CSV of Summer Rising sites and providers, so that I can import leads into a spreadsheet or CRM.
-2. As a sales operator, I want one row per site, provider, and affiliated school combination, so that each outreach target is independently filterable.
+2. As a sales operator, I want one row per site and provider, so that each outreach target is independently filterable without multiplying rows by affiliated school count.
 3. As a sales operator, I want site names included exactly as displayed by MySchools, so that I can recognize the same records the client sees manually.
 4. As a sales operator, I want district values for each site, so that I can group leads by NYC school district.
 5. As a sales operator, I want street address, city, state, and zip split into separate columns, so that I can sort, filter, and mail-merge accurately.
@@ -70,7 +70,8 @@ The extractor will output a CSV as the primary deliverable, preserve raw source 
 - Include a dry-run inspection command that captures candidate network requests and summarizes likely endpoints/fields without writing final CSV output.
 - Store raw source responses in timestamped snapshots and normalized outputs separately.
 - Output CSV first. XLSX or Google Sheets delivery can be added later if the client needs formatting, frozen headers, or direct spreadsheet publishing.
-- Model the row grain as one row per Summer Rising site, provider, and affiliated school combination.
+- Model the row grain as one row per Summer Rising site and provider, with affiliated schools retained as supporting context on the row.
+- Updated decision: the original site/provider/affiliated-school row grain was superseded after client review; provider contact information is the primary sales target for this time-sensitive project.
 - Repeat shared site fields on each provider/school row and include grouping identifiers for dedupe and aggregation.
 - Preserve exact source display values and add normalized companion fields where needed.
 - Preserve public source IDs such as MySchools site IDs, program IDs, DOE DBNs, and exposed school/program codes whenever available.
@@ -99,7 +100,7 @@ The extractor will output a CSV as the primary deliverable, preserve raw source 
 - Provider normalizer tests should verify grouping keys without mutating displayed names.
 - Affiliated school parser tests should verify extraction of school name, DBN/code, displayed grade range, and program code when present.
 - DOE matcher tests should cover exact ID/code matches, normalized address matches, suggested fuzzy candidates, and no-match cases.
-- CSV writer tests should verify one row per site/provider/affiliated-school combination and stable column ordering.
+- CSV writer tests should verify one row per site/provider combination, aggregated affiliated school context, and stable column ordering.
 - Validation report tests should verify counts for missing fields, duplicates, provider row totals, site totals, and rows needing review.
 - Snapshot/cache behavior should be tested enough to confirm reruns can operate from saved fixtures without live network calls.
 - Browser fallback should be tested at a high level only if it becomes necessary after endpoint inspection; do not over-test Playwright internals.

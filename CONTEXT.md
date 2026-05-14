@@ -5,11 +5,12 @@
 - **Summer Rising Site** — A public MySchools listing for a place where Summer Rising programming is offered for a given program year.
 - **Provider** — An organization publicly associated with a Summer Rising Site that may operate or coordinate programming at that site.
 - **Affiliated School** — A school publicly named in connection with a Provider's Summer Rising offering at a Summer Rising Site.
-- **Lead Row** — One sales-facing record for a Summer Rising Site, Provider, and Affiliated School combination.
+- **Affiliated School List** — The supporting list of Affiliated Schools associated with a Lead Row.
+- **Lead Row** — One sales-facing record for a Provider's offering at a Summer Rising Site, with any Affiliated Schools listed as supporting context.
 - **Primary Source** — The public MySchools Summer Rising listing used to decide which Summer Rising Sites exist for a program year.
 - **Verification Source** — A public source used to confirm or qualify school identity details without deciding whether a Summer Rising Site belongs in the dataset.
-- **School Verification** — The recorded result of comparing an Affiliated School or Summer Rising Site against a Verification Source.
-- **Verification Status** — The categorical confidence assigned to a School Verification; allowed statuses are **verified**, **source only**, **suggested match**, **needs review**, and **missing**, where **needs review** means a human should inspect the verification before treating it as confirmed.
+- **School Verification** — The row-level summary of comparing a Lead Row's Affiliated School List or Summer Rising Site against a Verification Source.
+- **Verification Status** — The categorical confidence assigned to a School Verification; allowed statuses are **verified**, **source only**, **suggested match**, **needs review**, and **missing**, where row-level summaries use the highest-action status in this order: **needs review**, **suggested match**, **verified**, **source only**, **missing**.
 - **Allowed Source Boundary** — The rule that Lead Rows may use only public, unauthenticated source data and must not use guessed, private, or login-gated values.
 - **Source Snapshot** — A saved copy of public source data captured for a specific program year and retrieval time.
 - **Program Year** — The Summer Rising season whose public listings are being captured.
@@ -18,6 +19,7 @@
 - **Lead Dataset** — The collection of Lead Rows produced for a Program Year.
 - **Validation Report** — A summary of completeness and review issues found in a Lead Dataset.
 - **Display Value** — The exact public source text retained for auditability before any normalization.
+- **Outreach Target** — The Provider Contact or provider-level contact channel used for sales follow-up from a Lead Row.
 
 ## Relationships
 
@@ -25,10 +27,12 @@
 - A **Provider** may be associated with many **Summer Rising Sites**.
 - A **Provider** at a **Summer Rising Site** may reference one or more **Affiliated Schools**.
 - An **Affiliated School** may appear in connection with more than one **Summer Rising Site** or **Provider**.
-- A **Lead Row** belongs to exactly one **Summer Rising Site**, one **Provider**, and one **Affiliated School** when all three are publicly available.
+- A **Lead Row** belongs to exactly one **Summer Rising Site** and one **Provider** when both are publicly available.
+- A **Lead Row** may have an **Affiliated School List** as supporting context.
+- An **Affiliated School List** contains zero or more **Affiliated Schools**.
 - The **Primary Source** determines whether a **Summer Rising Site** is included in the lead dataset.
 - A **Verification Source** can qualify a **Lead Row**, but does not remove it from the lead dataset.
-- A **School Verification** belongs to a **Lead Row** when a public school identity can be compared.
+- A **School Verification** belongs to a **Lead Row** when public school identity context can be compared.
 - A **School Verification** has exactly one **Verification Status**.
 - The **Allowed Source Boundary** applies to every **Lead Row**, **Provider**, **Affiliated School**, and **School Verification** value.
 - A **Source Snapshot** can produce many **Lead Rows**.
@@ -40,6 +44,7 @@
 - A **Lead Dataset** belongs to exactly one **Program Year**.
 - A **Validation Report** describes one **Lead Dataset**.
 - A **Lead Row** can include both a **Display Value** and a normalized companion value for the same source fact.
+- A **Lead Row** is organized around one **Outreach Target** when public source data exposes contact information.
 
 ## Example dialogue
 
@@ -53,7 +58,7 @@ Domain expert: "Not necessarily; it is the school named in the public Summer Ris
 
 Developer: "Why do two rows have the same site name?"
 
-Domain expert: "They are separate Lead Rows because the same Summer Rising Site can have multiple Providers or Affiliated Schools."
+Domain expert: "They are separate Lead Rows only when the same Summer Rising Site has multiple Providers."
 
 Developer: "Should a Summer Rising Site disappear if the DOE search cannot verify it?"
 
@@ -62,6 +67,14 @@ Domain expert: "No. The Primary Source decides inclusion; DOE verification only 
 Developer: "Is this DOE lookup a new lead?"
 
 Domain expert: "No. It is a School Verification for an existing Lead Row."
+
+Developer: "Should each affiliated school create a separate CSV row for verification?"
+
+Domain expert: "No. School Verification is summarized on the provider-focused Lead Row."
+
+Developer: "What is the sales target if a row names multiple affiliated schools?"
+
+Domain expert: "The Outreach Target is still the Provider Contact or provider-level contact channel, not each affiliated school."
 
 Developer: "Can we fill in a missing director email from a guess?"
 
@@ -84,3 +97,6 @@ Domain expert: "No. The Lead Dataset is the sales-facing output derived from Sou
 - "Site Director" can imply a single director for the whole site — resolved: use **Provider Contact** unless the source clearly identifies a contact as directing the entire **Summer Rising Site**.
 - "normalized" means adding a cleaned companion value while preserving the **Display Value**.
 - "Summer Rising Program" is too broad for the current glossary — resolved: use **Program Year**, **Summer Rising Site**, **Provider**, or a future source-specific term instead.
+- "Lead Row" previously meant one Summer Rising Site, Provider, and Affiliated School combination — resolved: use one **Lead Row** per **Summer Rising Site** and **Provider**, with **Affiliated Schools** listed as supporting context.
+- Multiple affiliated schools can produce mixed verification outcomes — resolved: summarize the **School Verification** on the **Lead Row** using the highest-action **Verification Status**, not the happiest status.
+- Closed implementation issues record the requirement that was true when they shipped — resolved: create follow-up issues for requirement changes instead of reopening completed historical work.
