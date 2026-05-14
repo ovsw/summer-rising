@@ -18,4 +18,5 @@ Produce a Validation Report and data dictionary for each Lead Dataset. The repor
 
 - #7.
 - #8.
-- Provider-focused Lead Row grain change.
+- #10.
+- Comprehensive Verification Source candidate capture.
